@@ -1,3 +1,5 @@
+import json
+import os
 from azure.storage.blob import BlobServiceClient
 
 def write_json_blob(container: str, blob_name: str, payload: dict) -> str:
