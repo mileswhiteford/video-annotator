@@ -9,6 +9,8 @@ from shared.speech_batch import (
     get_transcript_urls,
     download_and_normalize,
 )
+from shared.segmenter import segment_utterances
+from shared.util import write_json_blob
 
 def _cfg() -> SpeechConfig:
     endpoint = os.environ.get("SPEECH_ENDPOINT")
@@ -67,8 +69,25 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             if status == "Succeeded":
                 urls = get_transcript_urls(cfg, job_url)
                 result = download_and_normalize(urls, prefer_channel=0, dedupe=True)
+                utterances = result.get("utterances") or []
+                segment_ms = int(body.get("segment_ms", 30000))
+                segments = segment_utterances(utterances, segment_ms=segment_ms)
+
+                # Write segments to Blob
+                segments_container = os.environ.get("SEGMENTS_CONTAINER", "segments")
+                # Choose/derive a video_id (simple MVP: hash job_url)
+                video_id = body.get("video_id") or "vid_" + str(abs(hash(job_url)))
+                segments_payload = {
+                    "video_id": video_id,
+                    "segment_ms": segment_ms,
+                    "num_segments": len(segments),
+                    "segments": segments,
+                }
+                segments_blob = write_json_blob(segments_container, f"{video_id}.json", segments_payload)
+
+
                 return func.HttpResponse(
-                    json.dumps({"status": status, "result": result}),
+                    json.dumps({"status": status, "result": result, "segments_blob": segments_blob}),
                     mimetype="application/json",
                     status_code=200,
                 )
