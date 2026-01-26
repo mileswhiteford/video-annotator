@@ -82,6 +82,7 @@ def _search_index_documents(docs: List[Dict[str, Any]]) -> None:
 def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
         body = req.get_json()
+        print('body', body)
         segments_blob = body.get("segments_blob")
         if not segments_blob or "/" not in segments_blob:
             return func.HttpResponse(
@@ -123,7 +124,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             seg_id = s["segment_id"]
             doc = {
                 "@search.action": "mergeOrUpload",
-                "segment_key": f"{video_id}:{seg_id}",
+                "segment_key": f"{video_id}_{seg_id}",
                 "video_id": video_id,
                 "segment_id": seg_id,
                 "start_ms": int(s.get("start_ms", 0)),
