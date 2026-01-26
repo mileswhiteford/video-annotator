@@ -1,5 +1,7 @@
 import json
+import logging
 import os
+import traceback
 from typing import Any, Dict, List
 
 import azure.functions as func
@@ -82,7 +84,6 @@ def _search_index_documents(docs: List[Dict[str, Any]]) -> None:
 def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
         body = req.get_json()
-        print('body', body)
         segments_blob = body.get("segments_blob")
         if not segments_blob or "/" not in segments_blob:
             return func.HttpResponse(
@@ -146,10 +147,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
             status_code=200,
         )
-
     except Exception as e:
+        logging.exception("EmbedAndIndex failed")
         return func.HttpResponse(
-            json.dumps({"error": str(e)}),
+            json.dumps({"error": str(e), "trace": traceback.format_exc()}),
             mimetype="application/json",
             status_code=500,
         )
+    # except Exception as e:
+    #     return func.HttpResponse(
+    #         json.dumps({"error": str(e)}),
+    #         mimetype="application/json",
+    #         status_code=500,
+    #     )
