@@ -3,3 +3,7 @@ To publish to Azure:
 
 `func azure functionapp publish video-annotator-function`
 
+faster, if requirements.txt didn't change:
+
+`func azure functionapp publish video-annotator-function --no-build`
+
