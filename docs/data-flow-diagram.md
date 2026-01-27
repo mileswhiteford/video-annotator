@@ -19,7 +19,6 @@ flowchart TD
     Transcript[Transcript JSON<br/>utterances with timestamps]
     
     %% Segmentation
-    SegmentFn[SegmentTranscript Function<br/>or TranscribeHttp segments]
     Segments[30-second Segments<br/>segment_id, start_ms, end_ms, text]
     
     %% Storage
@@ -97,7 +96,7 @@ flowchart TD
 ### Transcription & Segmentation
 4. **TranscribeHttp Function** → Submits batch transcription jobs to Azure Speech Service
 5. **Azure Speech Service** → Processes audio and returns transcripts with word-level timestamps
-6. **Segmentation** → Splits transcripts into 30-second segments (handled by TranscribeHttp or SegmentTranscript function)
+6. **Segmentation** → Splits transcripts into 30-second segments (handled by `shared/segmenter.py`)
 7. **Blob Storage** → Stores segment JSON files (`segments/vid_xxx.json`)
 
 ### Embedding & Indexing
