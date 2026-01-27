@@ -1,3 +1,23 @@
+"""
+EmbedAndIndex - Azure Function for Embedding Generation and Search Indexing
+
+This Azure Function processes video segments for search:
+1. Reads segment JSON from Azure Blob Storage
+2. Generates vector embeddings via Azure OpenAI for each segment's text
+3. Indexes segments with embeddings into Azure AI Search
+
+Architecture Role:
+- Part of the ingestion pipeline (called by import_videos.py after transcription)
+- Prepares segments for searchability by creating embeddings and indexing
+- Enables hybrid search (keyword + vector) in SearchSegments function
+
+Input: POST with segments_blob path (e.g., "segments/vid_xxx.json")
+
+Output: JSON with video_id and count of indexed segments
+
+Note: Processes embeddings in batches (16 segments) and indexes in batches (500 docs)
+"""
+
 import json
 import logging
 import os

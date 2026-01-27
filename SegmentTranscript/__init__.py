@@ -1,3 +1,23 @@
+"""
+SegmentTranscript - Azure Function for Transcript Segmentation
+
+This Azure Function segments transcripts into fixed-duration clips (default 30 seconds).
+It can operate in two modes:
+1. Accept normalized transcript directly (from TranscribeHttp or external source)
+2. Fetch transcript from Azure Speech Service using a job_url
+
+Architecture Role:
+- Optional alternative to TranscribeHttp's built-in segmentation
+- Can be used standalone if you need to re-segment existing transcripts
+- Outputs segment JSON to Blob Storage for indexing
+
+Input: POST with either:
+  - result: Normalized transcript object with utterances
+  - job_url: Fetch and normalize transcript from Speech Service
+
+Output: JSON with segments array and optional Blob Storage path
+"""
+
 import json
 import os
 import math

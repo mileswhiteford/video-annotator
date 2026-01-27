@@ -1,3 +1,30 @@
+"""
+ui_search.py - Streamlit Web Interface for Video Segment Search
+
+This Streamlit application provides a user-friendly web interface for searching
+indexed video segments. Users can:
+- Enter text queries to search across all indexed segments
+- Choose search mode (keyword, vector, or hybrid)
+- Filter results by video_id and adjust result count
+- View segment text with timestamps and relevance scores
+
+Architecture Role:
+- Frontend user interface for the video annotation system
+- Deployed as Azure Container App (video-annotator-ui)
+- Calls SearchSegments Azure Function for all search operations
+- Displays results with formatted timestamps and metadata
+
+Deployment:
+  - Local: python -m streamlit run ui_search.py
+  - Azure: Deployed as Container App (see ui/README.md)
+
+Configuration (via .env or Container App env vars):
+  - SEARCH_FN_URL: SearchSegments function endpoint
+  - DEFAULT_MODE: Default search mode (hybrid/keyword/vector)
+  - DEFAULT_TOP: Default number of results
+  - DEFAULT_K: Default vector recall depth
+"""
+
 import os
 import requests
 import streamlit as st

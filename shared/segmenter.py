@@ -1,3 +1,22 @@
+"""
+shared/segmenter.py - Transcript Segmentation Logic
+
+This module contains the core segmentation algorithm that splits transcripts
+into fixed-duration segments (default 30 seconds). It handles overlapping
+utterances across segment boundaries and preserves timing information.
+
+Architecture Role:
+- Shared logic used by TranscribeHttp and SegmentTranscript functions
+- Converts utterance-level transcripts into time-aligned segments
+- Ensures segments contain all utterances that overlap their time windows
+
+Algorithm:
+  - Divides transcript timeline into fixed-duration windows
+  - Collects all utterances that overlap each window
+  - Concatenates utterance text within each segment
+  - Preserves start_ms, end_ms, and segment_id for indexing
+"""
+
 # shared/segmenter.py
 import math
 from typing import Any, Dict, List

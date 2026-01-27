@@ -1,3 +1,25 @@
+"""
+TranscribeHttp - Azure Function for Batch Transcription
+
+This Azure Function handles the transcription workflow for video files:
+1. Submits batch transcription jobs to Azure Speech Service
+2. Polls job status until completion
+3. Downloads and normalizes transcripts with word-level timestamps
+4. Segments transcripts into 30-second clips
+5. Writes segments to Azure Blob Storage
+
+Architecture Role:
+- Part of the ingestion pipeline (called by import_videos.py)
+- First step in processing videos from Box
+- Outputs segment JSON files to Blob Storage for downstream indexing
+
+Input: POST with either:
+  - media_url: Submit new transcription job
+  - job_url: Check status or fetch completed transcript
+
+Output: JSON with job_url (submission) or status/result (polling)
+"""
+
 import json
 import os
 import azure.functions as func

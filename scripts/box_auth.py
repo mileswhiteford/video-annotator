@@ -1,3 +1,23 @@
+"""
+scripts/box_auth.py - Box API Authentication Helper
+
+This module handles Box API authentication with support for multiple methods:
+1. Developer token (quick, expires)
+2. OAuth access token (if still valid)
+3. OAuth refresh token flow (long-term, auto-updates tokens)
+
+Architecture Role:
+- Authentication utility for Box-related scripts
+- Used by box_shared_folder_manifest.py to access Box API
+- Automatically refreshes and persists OAuth tokens in .env file
+- Provides unified get_access_token() interface
+
+Configuration (via .env):
+  - BOX_TOKEN: Developer token (fastest, no refresh)
+  - BOX_ACCESS_TOKEN + BOX_REFRESH_TOKEN: OAuth tokens (durable)
+  - BOX_CLIENT_ID + BOX_CLIENT_SECRET: Required for refresh flow
+"""
+
 import os
 import requests
 from dotenv import load_dotenv

@@ -1,3 +1,29 @@
+"""
+import_videos.py - Pipeline Orchestrator for Video Ingestion
+
+This script orchestrates the end-to-end video processing pipeline:
+1. Reads video manifest (videos.jsonl) generated from Box
+2. Submits transcription jobs via TranscribeHttp function
+3. Polls transcription status until completion
+4. Triggers embedding and indexing via EmbedAndIndex function
+5. Maintains progress state in pipeline_state.json for resumability
+
+Architecture Role:
+- Main entry point for batch video ingestion
+- Coordinates between Azure Functions (TranscribeHttp, EmbedAndIndex)
+- Handles job polling, error recovery, and state persistence
+- Can be resumed if interrupted (reads/writes pipeline_state.json)
+
+Usage:
+  python import_videos.py
+
+Configuration (via .env):
+  - TRANSCRIBE_URL: TranscribeHttp function endpoint
+  - EMBED_INDEX_URL: EmbedAndIndex function endpoint
+  - POLL_SECONDS: Polling interval (default: 15)
+  - MAX_ACTIVE: Max concurrent jobs to poll (default: 10)
+"""
+
 from dotenv import load_dotenv
 import json
 import os

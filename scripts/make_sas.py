@@ -1,3 +1,26 @@
+"""
+scripts/make_sas.py - Generate SAS URL for Blob Storage Testing
+
+This utility script generates a Shared Access Signature (SAS) URL for a blob
+in Azure Storage. Useful for testing transcription with local audio files
+or generating URLs for manual transcription job submission.
+
+Architecture Role:
+- Development/testing utility
+- Helps create accessible URLs for Azure Speech Service
+- Used when testing transcription with files already in blob storage
+
+Usage:
+  python scripts/make_sas.py
+
+Configuration (via local.settings.json or .env):
+  - AZURE_STORAGE_ACCOUNT: Storage account name
+  - AZURE_STORAGE_KEY: Storage account key
+  - INPUT_CONTAINER: Container name (default: speech-input)
+
+Note: Modify blob_name variable in script to target specific file
+"""
+
 # scripts/make_sas.py
 import os
 from shared.speech_batch import make_sas_url

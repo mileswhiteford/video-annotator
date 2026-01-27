@@ -1,3 +1,18 @@
+"""
+shared/util.py - Utility Functions for Azure Blob Storage
+
+This module provides helper functions for working with Azure Blob Storage,
+specifically for writing JSON data to blob containers.
+
+Architecture Role:
+- Shared utility used by Azure Functions (TranscribeHttp, SegmentTranscript)
+- Handles blob uploads with automatic container creation
+- Provides consistent JSON serialization and blob path formatting
+
+Functions:
+  - write_json_blob: Upload JSON payload to blob storage, returns path
+"""
+
 import json
 import os
 from azure.storage.blob import BlobServiceClient

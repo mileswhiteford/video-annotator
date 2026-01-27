@@ -1,3 +1,27 @@
+"""
+SearchSegments - Azure Function for Searching Indexed Video Segments
+
+This Azure Function provides search capabilities over indexed video segments:
+1. Supports three search modes: keyword, vector, or hybrid (keyword + vector)
+2. Embeds query text using Azure OpenAI for vector/hybrid modes
+3. Queries Azure AI Search index with optional filters (video_id, time range)
+4. Returns ranked results with segment metadata
+
+Architecture Role:
+- Query endpoint for the search interface (Streamlit UI)
+- Enables semantic search over transcribed video content
+- Supports filtering by video and time ranges
+
+Input: POST with:
+  - q: Search query text (required)
+  - mode: "keyword", "vector", or "hybrid" (default: "keyword")
+  - top: Number of results to return (1-50)
+  - k: Vector recall depth for vector/hybrid modes
+  - video_id, start_ms, end_ms: Optional filters
+
+Output: JSON with search mode, total count, and ranked hits array
+"""
+
 import json
 import os
 from typing import Any, Dict, List, Optional

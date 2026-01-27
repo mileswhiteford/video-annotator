@@ -1,3 +1,29 @@
+"""
+shared/speech_batch.py - Azure Speech Service Batch Transcription Utilities
+
+This module provides comprehensive utilities for working with Azure Speech Service
+batch transcription API. It handles:
+- Job submission and polling
+- Transcript download and normalization
+- Blob storage integration (SAS URL generation, file uploads)
+- Channel filtering and deduplication
+- Time conversion (100ns ticks to milliseconds)
+
+Architecture Role:
+- Core shared library for all transcription operations
+- Used by TranscribeHttp and SegmentTranscript Azure Functions
+- Provides normalized transcript format (utterances with timestamps)
+- Handles complex Speech API response formats and edge cases
+
+Key Functions:
+  - submit_transcription_job: Submit batch transcription
+  - get_job: Check transcription job status
+  - get_transcript_urls: Get transcript file URLs from completed job
+  - download_and_normalize: Download and normalize transcripts
+  - normalize_transcript: Convert Speech API JSON to standard format
+  - make_sas_url: Generate SAS URLs for blob access
+"""
+
 # shared/speech_batch.py - Simplified version
 import os
 import time
