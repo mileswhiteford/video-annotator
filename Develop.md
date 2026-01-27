@@ -12,6 +12,9 @@ faster, if requirements.txt didn't change:
 
 `func azure functionapp publish video-annotator-function --no-build`
 
+(If it's the first time deploying a specific function, be sure to do the full, slow install. )
+
+
 if for some reason this doesn't work, we try:
 
 zip -r app.zip . \
@@ -26,4 +29,8 @@ az functionapp deployment source config-zip \
 
 az webapp log tail -g video-annotator-robot -n video-annotator-function
 
+# debugging functions
+video-annotator-function -> overview -> (click on function you're debugging) -> Invocations
+
+This will show each call along with any error messages, since they are not sent back over HTTP.
 
