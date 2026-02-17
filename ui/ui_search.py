@@ -67,6 +67,8 @@ if 'batch_results' not in st.session_state:
     st.session_state.batch_results = []
 if 'batch_processing' not in st.session_state:
     st.session_state.batch_processing = False
+if 'index_schema_cache' not in st.session_state:
+    st.session_state.index_schema_cache = None
 
 # Sidebar
 with st.sidebar:
@@ -79,6 +81,22 @@ with st.sidebar:
                           index=["keyword", "hybrid", "vector"].index(DEFAULT_MODE) if DEFAULT_MODE in ("keyword", "hybrid", "vector") else 1)
         top = st.slider("Results", 1, 50, DEFAULT_TOP)
         k = st.slider("Vector k", 5, 200, DEFAULT_K)
+    
+    # Debug section
+    st.markdown("---")
+    if st.button("🔍 Debug Index Schema"):
+        with st.spinner("Fetching index schema..."):
+            schema_info = debug_check_index_schema()
+            if isinstance(schema_info, dict):
+                st.success(f"Index: {schema_info['index_name']}")
+                st.write(f"**Key Field:** `{schema_info['key_field']}`")
+                st.write("**Fields:**")
+                for field in schema_info['fields']:
+                    key_badge = "🔑 " if field['key'] else ""
+                    st.caption(f"{key_badge}`{field['name']}` ({field['type']})")
+                st.session_state.index_schema_cache = schema_info
+            else:
+                st.error(schema_info)
 
 
 # =============================================================================
@@ -97,6 +115,94 @@ def call_api(url: str, payload: dict, timeout: int = 60) -> dict:
     if r.status_code >= 400:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text}")
     return r.json() if r.text else {}
+
+
+def sanitize_id(id_string: str) -> str:
+    """
+    Sanitize ID to be valid for Azure Search (alphanumeric, hyphens, underscores only).
+    Document key rules: Cannot start with underscore, max 1024 chars.
+    """
+    if not id_string:
+        id_string = "unknown"
+    
+    # Replace invalid characters with underscore
+    sanitized = re.sub(r'[^\w\-]', '_', str(id_string))
+    
+    # Ensure it doesn't start with underscore (invalid for Azure Search keys)
+    if sanitized.startswith('_'):
+        sanitized = 'id' + sanitized
+    
+    # Ensure it doesn't start with dash (also problematic)
+    if sanitized.startswith('-'):
+        sanitized = 'id' + sanitized
+    
+    # Limit length to 1024 characters (Azure Search limit)
+    if len(sanitized) > 1024:
+        # Use hash to ensure uniqueness while truncating
+        hash_suffix = hashlib.md5(sanitized.encode()).hexdigest()[:16]
+        sanitized = sanitized[:1000] + "_" + hash_suffix
+    
+    return sanitized
+
+
+# =============================================================================
+# AZURE SEARCH SCHEMA FUNCTIONS
+# =============================================================================
+
+def debug_check_index_schema():
+    """Check if your index exists and verify the key field"""
+    if not SEARCH_ENDPOINT or not SEARCH_KEY or not SEARCH_INDEX_NAME:
+        return "Search not configured - check SEARCH_ENDPOINT, SEARCH_KEY, and SEARCH_INDEX_NAME"
+    
+    url = f"{SEARCH_ENDPOINT}/indexes/{SEARCH_INDEX_NAME}?api-version=2024-07-01"
+    headers = {"api-key": SEARCH_KEY}
+    
+    try:
+        r = requests.get(url, headers=headers, timeout=30)
+        if r.status_code == 200:
+            schema = r.json()
+            key_field = None
+            fields_info = []
+            
+            for field in schema.get("fields", []):
+                field_info = {
+                    "name": field.get("name"),
+                    "type": field.get("type"),
+                    "key": field.get("key", False),
+                    "searchable": field.get("searchable", False),
+                    "filterable": field.get("filterable", False),
+                    "sortable": field.get("sortable", False),
+                    "facetable": field.get("facetable", False),
+                    "retrievable": field.get("retrievable", False)
+                }
+                fields_info.append(field_info)
+                
+                if field.get("key", False):
+                    key_field = field.get("name")
+            
+            result = {
+                "index_name": schema.get("name"),
+                "key_field": key_field,
+                "fields": fields_info
+            }
+            return result
+        else:
+            return f"Index check failed: HTTP {r.status_code} - {r.text[:500]}"
+    except Exception as e:
+        return f"Error checking index: {str(e)}"
+
+
+def get_index_schema():
+    """Get cached schema or fetch new one"""
+    if st.session_state.index_schema_cache:
+        return st.session_state.index_schema_cache
+    
+    schema_info = debug_check_index_schema()
+    if isinstance(schema_info, dict):
+        st.session_state.index_schema_cache = schema_info
+        return schema_info
+    else:
+        raise RuntimeError(f"Cannot fetch index schema: {schema_info}")
 
 
 # =============================================================================
@@ -259,10 +365,22 @@ def get_embeddings(texts: list) -> list:
 def index_segments_direct(video_id: str, segments: list) -> Dict[str, Any]:
     """
     Index segments directly to Azure Cognitive Search.
-    Bypasses the EmbedAndIndex Azure Function.
+    
+    CRITICAL: Automatically detects the key field from index schema instead of assuming 'id'
     """
     if not SEARCH_ENDPOINT or not SEARCH_KEY:
         raise RuntimeError("Azure Search not configured")
+    
+    # Get the key field name from the index schema
+    schema_info = get_index_schema()
+    key_field = schema_info.get("key_field")
+    
+    if not key_field:
+        available = [f.get("name") for f in schema_info.get("fields", [])]
+        raise RuntimeError(f"No key field found in index. Available fields: {available}")
+    
+    # Get list of available fields to ensure we only send existing fields
+    available_fields = {f.get("name") for f in schema_info.get("fields", [])}
     
     # Generate embeddings for all segments
     texts = [seg.get("text", "") for seg in segments]
@@ -275,17 +393,44 @@ def index_segments_direct(video_id: str, segments: list) -> Dict[str, Any]:
     # Prepare search documents
     documents = []
     for i, (seg, embedding) in enumerate(zip(segments, embeddings)):
+        safe_video_id = sanitize_id(video_id)
+        doc_id = f"{safe_video_id}_{i}"
+        
+        # Build document dynamically based on what fields actually exist in the index
         doc = {
-            "id": f"{video_id}_{i}",
-            "video_id": video_id,
-            "segment_id": seg.get("segment_id", i),
-            "text": seg.get("text", ""),
-            "start_ms": seg.get("start_ms", 0),
-            "end_ms": seg.get("end_ms", 0),
-            "pred_labels": seg.get("pred_labels", [])
+            "@search.action": "upload"
         }
-        if embedding:
-            doc["embedding"] = embedding
+        
+        # Add the key field (whatever it's actually named in your index)
+        doc[key_field] = doc_id
+        
+        # Map of our field names to potential index field names
+        field_mappings = {
+            "video_id": safe_video_id,
+            "segment_id": str(seg.get("segment_id", i)),
+            "text": str(seg.get("text", "")),
+            "start_ms": int(seg.get("start_ms", 0)),
+            "end_ms": int(seg.get("end_ms", 0)),
+            "pred_labels": seg.get("pred_labels", []) if seg.get("pred_labels") else []
+        }
+        
+        # Only add fields that exist in the index schema
+        for field_name, value in field_mappings.items():
+            if field_name in available_fields:
+                doc[field_name] = value
+        
+        # Handle embedding field - check for common naming variations
+        embedding_field = None
+        for possible_name in ["embedding", "embeddings", "vector", "vectors"]:
+            if possible_name in available_fields:
+                embedding_field = possible_name
+                break
+        
+        if embedding and isinstance(embedding, list) and len(embedding) > 0 and embedding_field:
+            try:
+                doc[embedding_field] = [float(x) for x in embedding]
+            except (ValueError, TypeError):
+                st.warning(f"Skipping embedding for segment {i} due to conversion error")
         
         documents.append(doc)
     
@@ -303,8 +448,36 @@ def index_segments_direct(video_id: str, segments: list) -> Dict[str, Any]:
     
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=60)
-        r.raise_for_status()
-        return {"indexed": len(documents), "video_id": video_id}
+        
+        if r.status_code >= 400:
+            error_detail = ""
+            try:
+                error_json = r.json()
+                error_detail = json.dumps(error_json, indent=2)
+            except:
+                error_detail = r.text
+            
+            raise RuntimeError(f"Indexing failed: HTTP {r.status_code}\nDetails: {error_detail}")
+        
+        result = r.json()
+        
+        # Check for partial failures (207 Multi-Status)
+        if r.status_code == 207:
+            failed_docs = [item for item in result.get("value", []) if not item.get("status", False)]
+            if failed_docs:
+                st.warning(f"Partial indexing failure: {len(failed_docs)} documents failed")
+                for fail in failed_docs[:3]:
+                    st.error(f"Doc {fail.get('key', 'unknown')}: {fail.get('errorMessage', 'Unknown error')}")
+        
+        return {
+            "indexed": len(documents), 
+            "video_id": video_id, 
+            "key_field_used": key_field,
+            "api_response": result
+        }
+        
+    except requests.exceptions.HTTPError as e:
+        raise RuntimeError(f"HTTP Error: {str(e)}")
     except Exception as e:
         raise RuntimeError(f"Indexing failed: {str(e)}")
 
@@ -471,7 +644,7 @@ def generate_sas_token_fixed(blob_name: str, expiry_hours: int = 24) -> str:
         
         # ====================================================================
         # CRITICAL FIX: Service SAS string-to-sign format
-        # Reference: https://docs.microsoft.com/en-us/rest/api/storageservices/create-service-sas
+        # Reference: https://docs.microsoft.com/en-us/rest/api/storageservices/create-service-sas  
         # Format for Blob service SAS:
         # StringToSign = signedPermissions + "\n" +
         #                signedStart + "\n" +
@@ -894,9 +1067,9 @@ def process_single_video(url: str, custom_id: Optional[str] = None,
         # Index to search
         try:
             index_result = index_segments_direct(video_id, segments)
-            result["index_status"] = f"Indexed {index_result.get('indexed', 0)} documents"
+            result["index_status"] = f"Indexed {index_result.get('indexed', 0)} documents (key: {index_result.get('key_field_used', 'unknown')})"
         except Exception as e:
-            result["index_status"] = f"Indexing skipped: {str(e)}"
+            result["index_status"] = f"Indexing failed: {str(e)}"
         
         result["status"] = "success"
         
@@ -1003,7 +1176,7 @@ elif page == "⬆️ Upload & Transcribe":
     # DIRECT URL
     # -------------------------------------------------------------------------
     elif source_type == "Direct URL":
-        url_input = st.text_input("Media URL", placeholder="https://tulane.box.com/shared/static/    ...")
+        url_input = st.text_input("Media URL", placeholder="https://tulane.box.com/shared/static/...")
         
         if url_input.strip():
             media_url = url_input.strip()
@@ -1017,7 +1190,7 @@ elif page == "⬆️ Upload & Transcribe":
         # Use session state to persist the URL
         yt_url = st.text_input(
             "YouTube URL", 
-            placeholder="https://youtube.com/watch?v=  ...",
+            placeholder="https://youtube.com/watch?v=...",
             value=st.session_state.yt_url_value,
             key="yt_url_input"
         )
@@ -1456,9 +1629,9 @@ elif page == "⬆️ Upload & Transcribe":
                 # Index to search
                 try:
                     index_result = index_segments_direct(video_id, segments)
-                    index_msg = f"Indexed: {index_result.get('indexed', 0)} documents"
+                    index_msg = f"Indexed: {index_result.get('indexed', 0)} documents (key field: {index_result.get('key_field_used', 'unknown')})"
                 except Exception as e:
-                    index_msg = f"Indexing skipped: {e}"
+                    index_msg = f"Indexing failed: {str(e)}"
                 
                 progress_bar.progress(100)
                 status.text("Complete!")
