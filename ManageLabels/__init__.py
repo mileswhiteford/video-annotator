@@ -17,12 +17,25 @@ Output: JSON with label data or operation status
 
 import json
 import os
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import azure.functions as func
+import requests
 from azure.storage.blob import BlobServiceClient
+
+
+def _trigger_labeling() -> None:
+    """Fire-and-forget call to LabelSegments after any label change."""
+    url = os.environ.get("LABEL_SEGMENTS_URL", "")
+    if not url:
+        return
+    try:
+        requests.post(url, json={}, timeout=600)
+    except Exception:
+        pass
 
 
 def _blob_service() -> BlobServiceClient:
@@ -127,6 +140,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             library["labels"].append(new_label)
             library["last_updated"] = now
             _write_label_json(library)
+            threading.Thread(target=_trigger_labeling, daemon=True).start()
 
             return func.HttpResponse(
                 json.dumps(new_label, ensure_ascii=False),
@@ -172,6 +186,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             label["updated_at"] = datetime.now(timezone.utc).isoformat()
             library["last_updated"] = label["updated_at"]
             _write_label_json(library)
+            threading.Thread(target=_trigger_labeling, daemon=True).start()
 
             return func.HttpResponse(
                 json.dumps(label, ensure_ascii=False),
@@ -201,6 +216,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             label["updated_at"] = datetime.now(timezone.utc).isoformat()
             library["last_updated"] = label["updated_at"]
             _write_label_json(library)
+            threading.Thread(target=_trigger_labeling, daemon=True).start()
 
             return func.HttpResponse(
                 json.dumps({"success": True, "message": "Label deactivated"}),

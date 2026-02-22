@@ -93,6 +93,7 @@ with tab_add:
                 result = call_labels_api("POST", {"name": new_name, "description": new_desc})
                 if result and "label_id" in result:
                     st.success(f"Label '{result['name']}' added!")
+                    st.info("Labeling queued — updated labels will appear in search results shortly.")
                     st.rerun()
 
 # --- TAB 3: Edit Label ---
@@ -124,12 +125,14 @@ with tab_edit:
                     })
                     if result and "label_id" in result:
                         st.success("Label updated!")
+                        st.info("Labeling queued — updated labels will appear in search results shortly.")
                         st.rerun()
 
                 if delete_submit:
                     result = call_labels_api("DELETE", {"label_id": label["label_id"]})
                     if result and result.get("success"):
                         st.success("Label deactivated!")
+                        st.info("Labeling queued — updated labels will appear in search results shortly.")
                         st.rerun()
     else:
         st.info("No labels available to edit. Add a label first.")
