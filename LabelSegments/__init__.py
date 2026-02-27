@@ -18,10 +18,8 @@ Environment Variables:
   AZURE_STORAGE_KEY       - Storage account key
   LABELS_CONTAINER        - Blob container for label library (default: "labels")
   SEGMENTS_CONTAINER      - Blob container for segments (default: "segments")
-  CHAT_ENDPOINT           - Azure OpenAI endpoint
-  CHAT_KEY                - Azure OpenAI API key
-  CHAT_DEPLOYMENT         - GPT-4o-mini deployment name
-  CHAT_API_VERSION        - Azure OpenAI API version (default: "2024-10-21")
+  PROXY_BASE_URL          - Azure OpenAI proxy base URL (e.g. https://<app>.azurewebsites.net/api/v1)
+  FUNCTION_HOST_KEY       - Azure Function host key for the proxy
   SEARCH_ENDPOINT         - Azure AI Search endpoint
   SEARCH_ADMIN_KEY        - Azure AI Search admin key
   SEARCH_INDEX            - Search index name (default: "segments")
@@ -36,6 +34,7 @@ from typing import Any, Dict, List
 import azure.functions as func
 import requests
 from azure.storage.blob import BlobServiceClient
+from openai import OpenAI
 
 
 LABEL_BATCH_SIZE = 10
@@ -77,19 +76,14 @@ def _read_json_blob(container: str, blob_name: str) -> Dict[str, Any]:
 
 def _call_gpt(label_defs: List[Dict], seg_inputs: List[Dict]) -> List[Dict]:
     """
-    Call GPT-4o-mini to label a batch of segments against all labels.
+    Call GPT-4o-mini via proxy to label a batch of segments against all labels.
     Returns list of {segment_id, labels: [{name, rationale}]}.
     """
-    endpoint = os.environ["CHAT_ENDPOINT"].rstrip("/")
-    key = os.environ["CHAT_KEY"]
-    deployment = os.environ["CHAT_DEPLOYMENT"]
-    api_version = os.environ.get("CHAT_API_VERSION", "2024-10-21")
-
-    url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": key,
-    }
+    client = OpenAI(
+        base_url=os.environ["PROXY_BASE_URL"],
+        api_key="unused",
+        default_headers={"x-functions-key": os.environ["FUNCTION_HOST_KEY"]},
+    )
 
     system_prompt = (
         "You are a content labeler. Given label definitions and video transcript segments, "
@@ -107,27 +101,23 @@ def _call_gpt(label_defs: List[Dict], seg_inputs: List[Dict]) -> List[Dict]:
         "Use an empty labels array if no labels apply to a segment."
     )
 
-    payload = {
-        "messages": [
+    resp = client.responses.create(
+        model="gpt-4o-mini",
+        input=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0,
-        "response_format": {"type": "json_object"},
-    }
+        temperature=0,
+        text={"format": {"type": "json_object"}},
+    )
 
-    r = requests.post(url, headers=headers, json=payload, timeout=120)
-    if not r.ok:
-        raise RuntimeError(f"GPT call failed: {r.status_code} {r.text}")
-
-    content = r.json()["choices"][0]["message"]["content"]
-    parsed = json.loads(content)
+    parsed = json.loads(resp.output_text)
     return parsed.get("results", [])
 
 
 def _validate_labels(gpt_labels: List[Dict], valid_names: set) -> List[Dict]:
     """Filter GPT-returned labels to only those present in the label library."""
-    return [l for l in gpt_labels if l.get("name", "") in valid_names]
+    return [l for l in gpt_labels if isinstance(l, dict) and l.get("name", "") in valid_names]
 
 
 def _index_documents(docs: List[Dict[str, Any]]) -> None:
