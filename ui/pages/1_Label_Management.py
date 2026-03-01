@@ -50,6 +50,12 @@ def call_labels_api(method: str = "GET", payload: dict = None) -> dict:
         return {}
 
 
+# --- Labeling status banner ---
+_status_library = call_labels_api("GET")
+_pending = any(not l.get("applied", True) for l in _status_library.get("labels", []))
+if _pending:
+    st.warning("Labeling in progress — search results will update once complete. Refresh to check status.")
+
 # --- Tab layout ---
 tab_view, tab_add, tab_edit = st.tabs(["View Labels", "Add Label", "Edit Label"])
 
