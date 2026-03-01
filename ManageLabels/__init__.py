@@ -135,6 +135,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 "created_at": now,
                 "updated_at": now,
                 "is_active": True,
+                "applied": False,
             }
 
             library["labels"].append(new_label)
@@ -167,6 +168,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 )
 
             # Update fields
+            old_name = label["name"]
             if "name" in body:
                 new_name = body["name"].strip()
                 if new_name and not _validate_label_name(new_name, library, exclude_id=label_id):
@@ -176,6 +178,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                         status_code=400,
                     )
                 label["name"] = new_name
+                # Track old name so LabelSegments can strip it from existing assignments
+                if old_name != new_name:
+                    removed = library.setdefault("removed_labels", [])
+                    if old_name not in removed:
+                        removed.append(old_name)
 
             if "description" in body:
                 label["description"] = body["description"].strip()
@@ -183,6 +190,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             if "is_active" in body:
                 label["is_active"] = bool(body["is_active"])
 
+            # Reset applied so LabelSegments re-runs this label against all segments
+            label["applied"] = False
             label["updated_at"] = datetime.now(timezone.utc).isoformat()
             library["last_updated"] = label["updated_at"]
             _write_label_json(library)
@@ -213,6 +222,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 )
 
             label["is_active"] = False
+            # Track name so LabelSegments strips this label from all segment assignments
+            removed = library.setdefault("removed_labels", [])
+            if label["name"] not in removed:
+                removed.append(label["name"])
             label["updated_at"] = datetime.now(timezone.utc).isoformat()
             library["last_updated"] = label["updated_at"]
             _write_label_json(library)
