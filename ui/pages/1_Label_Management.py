@@ -50,8 +50,9 @@ def call_labels_api(method: str = "GET", payload: dict = None) -> dict:
 
 
 # --- Labeling status banner ---
-_status_library = call_labels_api("GET")
-_pending = any(not l.get("applied", True) for l in _status_library.get("labels", []))
+library = call_labels_api("GET")
+labels = library.get("labels", []) if isinstance(library, dict) else []
+_pending = any(not l.get("applied", True) for l in labels)
 if _pending:
     st.warning("Labeling in progress — search results will update once complete. Refresh to check status.")
 
@@ -71,8 +72,6 @@ tab_view, tab_add, tab_edit = st.tabs(["View Labels", "Add Label", "Edit Label"]
 with tab_view:
     if st.button("Refresh"):
         st.rerun()
-
-    library = call_labels_api("GET")
 
     if library and "labels" in library:
         st.caption(f"**Last Updated:** {library.get('last_updated', 'N/A')}")
@@ -112,8 +111,6 @@ with tab_add:
 
 # --- TAB 3: Edit Label ---
 with tab_edit:
-    library = call_labels_api("GET")
-
     if library and library.get("labels"):
         label_options = {l["name"]: l for l in library["labels"]}
         selected_name = st.selectbox("Select Label", options=list(label_options.keys()))
