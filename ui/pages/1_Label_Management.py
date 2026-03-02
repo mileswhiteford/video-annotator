@@ -31,6 +31,7 @@ if not MANAGE_LABELS_URL:
 
 def call_labels_api(method: str = "GET", payload: dict = None) -> dict:
     """Call ManageLabels Azure Function."""
+    method = method.upper()
     try:
         r = requests.request(
             method,
@@ -43,14 +44,23 @@ def call_labels_api(method: str = "GET", payload: dict = None) -> dict:
             error_msg = r.json().get("error", r.text) if r.text else f"HTTP {r.status_code}"
             st.error(f"API Error: {error_msg}")
             return {}
-        return r.json() if r.text else {}
+        data = r.json() if r.text else {}
+        if method != "GET":
+            get_label_library.clear()
+        return data
     except requests.exceptions.RequestException as e:
         st.error(f"Connection error: {e}")
         return {}
 
 
+@st.cache_data(ttl=8, show_spinner=False)
+def get_label_library() -> dict:
+    """Short-lived cache to avoid repeated GET requests per rerun."""
+    return call_labels_api("GET")
+
+
 # --- Labeling status banner ---
-library = call_labels_api("GET")
+library = get_label_library()
 labels = library.get("labels", []) if isinstance(library, dict) else []
 _pending = any(not l.get("applied", True) for l in labels)
 if _pending:
@@ -71,6 +81,7 @@ tab_view, tab_add, tab_edit = st.tabs(["View Labels", "Add Label", "Edit Label"]
 # --- TAB 1: View Labels ---
 with tab_view:
     if st.button("Refresh"):
+        get_label_library.clear()
         st.rerun()
 
     if library and "labels" in library:
