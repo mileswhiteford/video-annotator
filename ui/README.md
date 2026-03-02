@@ -83,6 +83,14 @@ az containerapp update \
     DEFAULT_K="40"
 ```
 
+### Adding env var for label management
+
+```bash
+az containerapp secret set -g "$RG" -n "$APP" --secrets manage-labels-url="https://video-annotator-function-ftdggpcvfyb0ehee.eastus-01.azurewebsites.net/api/ManageLabels?code=..."
+
+az containerapp update  -g "$RG" -n "$APP" --set-env-vars MANAGE_LABELS_URL=secretref:manage-labels-url
+```
+
 ### Scale to zero (optional)
 
 ```bash
