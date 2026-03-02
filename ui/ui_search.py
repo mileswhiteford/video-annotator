@@ -42,7 +42,7 @@ st.set_page_config(page_title="Video Segment Search", layout="wide")
 st.title("🔎 Search indexed video segments")
 
 with st.sidebar:
-    st.header("Search settings")
+    st.header("Settings")
     mode = st.selectbox(
         "Mode",
         ["keyword", "hybrid", "vector"],
@@ -116,7 +116,6 @@ if go:
             rationale = h.get("pred_rationale")
 
             if labels or conf is not None or rationale:
-                st.subheader("Annotations")
                 if labels:
                     st.write("**Labels:**", ", ".join(labels))
                 if conf is not None:

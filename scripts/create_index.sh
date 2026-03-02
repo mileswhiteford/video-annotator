@@ -18,10 +18,11 @@ curl -X PUT "$SEARCH_ENDPOINT/indexes/$SEARCH_INDEX?api-version=2024-05-01-previ
         "vectorSearchProfile": "vs_profile"
       },
 
-      { "name": "pred_labels",      "type": "Collection(Edm.String)", "searchable": false, "filterable": true, "sortable": false, "facetable": true },
-      { "name": "pred_confidence",  "type": "Edm.Double", "searchable": false, "filterable": true, "sortable": true, "facetable": false },
-      { "name": "pred_rationale",   "type": "Edm.String", "searchable": true, "filterable": false, "sortable": false, "facetable": false },
-      { "name": "guideline_version","type": "Edm.String", "searchable": false, "filterable": true, "sortable": true, "facetable": true }
+      { "name": "pred_labels",       "type": "Collection(Edm.String)", "searchable": false, "filterable": true, "sortable": false, "facetable": true },
+      { "name": "pred_confidence",   "type": "Edm.Double", "searchable": false, "filterable": true, "sortable": true, "facetable": false },
+      { "name": "pred_rationale",    "type": "Edm.String", "searchable": true, "filterable": false, "sortable": false, "facetable": false },
+      { "name": "pred_label_details","type": "Edm.String", "searchable": false, "filterable": false, "sortable": false, "facetable": false },
+      { "name": "guideline_version", "type": "Edm.String", "searchable": false, "filterable": true, "sortable": true, "facetable": true }
     ],
     "vectorSearch": {
       "algorithms": [
