@@ -39,24 +39,6 @@ DEFAULT_TOP = int(os.environ.get("DEFAULT_TOP", "10"))
 DEFAULT_K = int(os.environ.get("DEFAULT_K", "40"))
 
 st.set_page_config(page_title="Video Segment Search", layout="wide")
-st.title("🔎 Search indexed video segments")
-
-with st.sidebar:
-    st.header("Settings")
-    mode = st.selectbox(
-        "Mode",
-        ["keyword", "hybrid", "vector"],
-        index=["keyword", "hybrid", "vector"].index(DEFAULT_MODE)
-        if DEFAULT_MODE in ("keyword", "hybrid", "vector")
-        else 1,
-    )
-    top = st.slider("Top", 1, 50, DEFAULT_TOP)
-    k = st.slider("Vector k (hybrid/vector)", 5, 200, DEFAULT_K)
-    video_id_filter = st.text_input("Filter by video_id (optional)", value="")
-    st.caption("Tip: keep k ~ 4×top for hybrid.")
-
-q = st.text_input("Query", value="", placeholder="e.g., measles misinformation")
-go = st.button("Search", type="primary", disabled=(not q.strip()))
 
 
 def ms_to_ts(ms: int) -> str:
@@ -78,47 +60,73 @@ def call_search_api(payload: dict) -> dict:
     return r.json() if r.text else {}
 
 
-if go:
-    payload = {"q": q.strip(), "mode": mode, "top": top}
-    if mode in ("hybrid", "vector"):
-        payload["k"] = k
-    if video_id_filter.strip():
-        payload["video_id"] = video_id_filter.strip()
+def render_search_page() -> None:
+    st.title("🔎 Search indexed video segments")
 
-    try:
-        with st.spinner("Searching..."):
-            data = call_search_api(payload)
-    except Exception as e:
-        st.error(f"Search failed: {e}")
-        st.stop()
+    with st.sidebar:
+        st.header("Settings")
+        mode = st.selectbox(
+            "Mode",
+            ["keyword", "hybrid", "vector"],
+            index=["keyword", "hybrid", "vector"].index(DEFAULT_MODE)
+            if DEFAULT_MODE in ("keyword", "hybrid", "vector")
+            else 1,
+        )
+        top = st.slider("Top", 1, 50, DEFAULT_TOP)
+        k = st.slider("Vector k (hybrid/vector)", 5, 200, DEFAULT_K)
+        video_id_filter = st.text_input("Filter by video_id (optional)", value="")
+        st.caption("Tip: keep k ~ 4×top for hybrid.")
 
-    hits = data.get("hits", [])
-    st.caption(f"Count: {data.get('count')} | Returned: {len(hits)}")
+    q = st.text_input("Query", value="", placeholder="e.g., measles misinformation")
+    go = st.button("Search", type="primary", disabled=(not q.strip()))
 
-    for i, h in enumerate(hits, start=1):
-        start_ms = h.get("start_ms", 0)
-        end_ms = h.get("end_ms", 0)
-        vid = h.get("video_id", "")
-        seg = h.get("segment_id", "")
-        score = h.get("score", None)
+    if go:
+        payload = {"q": q.strip(), "mode": mode, "top": top}
+        if mode in ("hybrid", "vector"):
+            payload["k"] = k
+        if video_id_filter.strip():
+            payload["video_id"] = video_id_filter.strip()
 
-        header = f"{i}. {vid}  |  {ms_to_ts(start_ms)}–{ms_to_ts(end_ms)}"
-        if seg:
-            header += f"  |  seg={seg}"
-        if score is not None:
-            header += f"  |  score={score:.3f}" if isinstance(score, (int, float)) else f"  |  score={score}"
+        try:
+            with st.spinner("Searching..."):
+                data = call_search_api(payload)
+        except Exception as e:
+            st.error(f"Search failed: {e}")
+            st.stop()
 
-        with st.expander(header, expanded=(i <= 3)):
-            st.write(h.get("text", ""))
+        hits = data.get("hits", [])
+        st.caption(f"Count: {data.get('count')} | Returned: {len(hits)}")
 
-            labels = h.get("pred_labels") or []
-            conf = h.get("pred_confidence")
-            rationale = h.get("pred_rationale")
+        for i, h in enumerate(hits, start=1):
+            start_ms = h.get("start_ms", 0)
+            end_ms = h.get("end_ms", 0)
+            vid = h.get("video_id", "")
+            seg = h.get("segment_id", "")
+            score = h.get("score", None)
 
-            if labels or conf is not None or rationale:
-                if labels:
-                    st.write("**Labels:**", ", ".join(labels))
-                if conf is not None:
-                    st.write("**Confidence:**", conf)
-                if rationale:
-                    st.write("**Rationale:**", rationale)
+            header = f"{i}. {vid}  |  {ms_to_ts(start_ms)}–{ms_to_ts(end_ms)}"
+            if seg:
+                header += f"  |  seg={seg}"
+            if score is not None:
+                header += f"  |  score={score:.3f}" if isinstance(score, (int, float)) else f"  |  score={score}"
+
+            with st.expander(header, expanded=(i <= 3)):
+                st.write(h.get("text", ""))
+
+                labels = h.get("pred_labels") or []
+                conf = h.get("pred_confidence")
+                rationale = h.get("pred_rationale")
+
+                if labels or conf is not None or rationale:
+                    if labels:
+                        st.write("**Labels:**", ", ".join(labels))
+                    if conf is not None:
+                        st.write("**Confidence:**", conf)
+                    if rationale:
+                        st.write("**Rationale:**", rationale)
+
+
+pg_search = st.Page(render_search_page, title="Search", icon="🔎", default=True)
+pg_labels = st.Page("pages/1_Label_Management.py", title="Label Management", icon="🏷️")
+
+st.navigation([pg_search, pg_labels]).run()

@@ -22,7 +22,6 @@ load_dotenv()
 
 MANAGE_LABELS_URL = os.environ.get("MANAGE_LABELS_URL", "")
 
-st.set_page_config(page_title="Label Management", layout="wide")
 st.title("Label Library Management")
 
 if not MANAGE_LABELS_URL:
