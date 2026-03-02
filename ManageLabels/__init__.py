@@ -104,8 +104,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 status_code=200,
             )
 
-        # POST/PUT/DELETE: Modify labels
-        body = req.get_json()
+        # POST/PUT/DELETE/PATCH: Modify labels
+        try:
+            body = req.get_json()
+        except Exception:
+            body = {}
         library = _read_label_json()
 
         # POST: Add new label
@@ -233,6 +236,24 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
             return func.HttpResponse(
                 json.dumps({"success": True, "message": "Label deactivated"}),
+                mimetype="application/json",
+                status_code=200,
+            )
+
+        # PATCH: Reset all labels to force a full re-run
+        elif method == "PATCH":
+            now = datetime.now(timezone.utc).isoformat()
+            count = 0
+            for label in library["labels"]:
+                if label.get("is_active", True):
+                    label["applied"] = False
+                    count += 1
+            library["last_updated"] = now
+            _write_label_json(library)
+            threading.Thread(target=_trigger_labeling, daemon=True).start()
+
+            return func.HttpResponse(
+                json.dumps({"message": f"Reset {count} labels, re-labeling queued."}),
                 mimetype="application/json",
                 status_code=200,
             )

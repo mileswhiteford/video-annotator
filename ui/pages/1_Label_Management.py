@@ -56,6 +56,15 @@ _pending = any(not l.get("applied", True) for l in _status_library.get("labels",
 if _pending:
     st.warning("Labeling in progress — search results will update once complete. Refresh to check status.")
 
+# --- Re-run all labels ---
+with st.expander("Re-run all labels"):
+    st.caption("Resets all labels and re-applies them to every segment. Use this to refresh reasoning or fix missed labels.")
+    if st.button("Re-run all labels", type="primary"):
+        result = call_labels_api("PATCH")
+        if result:
+            st.success(result.get("message", "Re-labeling queued."))
+            st.rerun()
+
 # --- Tab layout ---
 tab_view, tab_add, tab_edit = st.tabs(["View Labels", "Add Label", "Edit Label"])
 

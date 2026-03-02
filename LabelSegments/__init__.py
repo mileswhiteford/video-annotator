@@ -30,8 +30,9 @@ import json
 import logging
 import os
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Set, Tuple
 
 import azure.functions as func
 import requests
@@ -39,8 +40,9 @@ from azure.storage.blob import BlobServiceClient
 from openai import OpenAI
 
 
-LABEL_BATCH_SIZE = 10
+LABEL_BATCH_SIZE = 20
 INDEX_BATCH_SIZE = 500
+GPT_WORKERS = 3
 SEARCH_API_VERSION = "2024-05-01-preview"
 
 
@@ -142,18 +144,25 @@ def _call_gpt(label_defs: List[Dict], seg_inputs: List[Dict]) -> List[Dict]:
 
     system_prompt = (
         "You are a content labeler. Given label definitions and video transcript segments, "
-        "return which labels apply to each segment as a JSON object. "
+        "decide whether each label applies to each segment. "
+        "Return a decision for EVERY label for EVERY segment — including labels that do not apply. "
         'Your response must be a JSON object with a "results" key containing an array.'
     )
 
     user_prompt = (
         f"Labels:\n{json.dumps(label_defs, ensure_ascii=False)}\n\n"
         f"Segments:\n{json.dumps(seg_inputs, ensure_ascii=False)}\n\n"
+        "For each segment, return every label with:\n"
+        '  - "applied": true if the segment mentions, discusses, or is clearly related to the label topic\n'
+        '  - "applied": false if the label does not apply\n'
+        '  - "rationale": a brief explanation of your decision either way\n\n'
         "Return:\n"
         '{"results": [\n'
-        '  {"segment_id": "0000", "labels": [{"name": "LabelName", "rationale": "explanation"}]}\n'
-        "]}\n"
-        "Use an empty labels array if no labels apply to a segment."
+        '  {"segment_id": "0000", "labels": [\n'
+        '    {"name": "LabelName", "applied": true, "rationale": "explanation"},\n'
+        '    {"name": "OtherLabel", "applied": false, "rationale": "explanation"}\n'
+        "  ]}\n"
+        "]}"
     )
 
     resp = client.responses.create(
@@ -173,6 +182,52 @@ def _call_gpt(label_defs: List[Dict], seg_inputs: List[Dict]) -> List[Dict]:
 def _validate_labels(gpt_labels: List[Dict], valid_names: Set[str]) -> List[Dict]:
     """Filter GPT-returned labels to only those present in the label library."""
     return [l for l in gpt_labels if isinstance(l, dict) and l.get("name", "") in valid_names]
+
+
+def _process_batch(
+    label_defs: List[Dict],
+    valid_names: Set[str],
+    strip_names: Set[str],
+    existing_index: Dict[str, Dict],
+    video_id: str,
+    batch: List[Dict],
+    blob_name: str,
+    batch_idx: int,
+) -> List[Dict[str, Any]]:
+    """Call GPT for one batch of segments and return index-ready docs."""
+    seg_inputs = [{"segment_id": s["segment_id"], "text": s["text"]} for s in batch]
+
+    if label_defs:
+        try:
+            gpt_results = _call_gpt(label_defs, seg_inputs)
+        except Exception as e:
+            logging.warning(f"GPT batch failed for {blob_name} batch {batch_idx}: {e}")
+            gpt_results = []
+    else:
+        gpt_results = []
+
+    results_map = {r["segment_id"]: r for r in gpt_results}
+    docs = []
+
+    for s in batch:
+        seg_id = s["segment_id"]
+        segment_key = f"{video_id}_{seg_id}"
+
+        existing = existing_index.get(segment_key, {"pred_labels": [], "pred_label_details": []})
+        kept_labels = [n for n in existing["pred_labels"] if n not in strip_names]
+        kept_details = [d for d in existing["pred_label_details"] if isinstance(d, dict) and d.get("name") not in strip_names]
+
+        result = results_map.get(seg_id, {})
+        validated = _validate_labels(result.get("labels", []), valid_names)
+
+        docs.append({
+            "@search.action": "mergeOrUpload",
+            "segment_key": segment_key,
+            "pred_labels": kept_labels + [l["name"] for l in validated if l.get("applied", True)],
+            "pred_label_details": json.dumps(kept_details + validated, ensure_ascii=False),
+        })
+
+    return docs
 
 
 def _index_documents(docs: List[Dict[str, Any]]) -> None:
@@ -221,59 +276,41 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         segments_container = os.environ.get("SEGMENTS_CONTAINER", "segments")
         blob_names = _list_segment_blobs()
-        total_labeled = 0
 
+        # Collect all batches across all blobs
+        all_batches: List[Tuple] = []
         for blob_name in blob_names:
             payload = _read_json_blob(segments_container, blob_name)
             if not isinstance(payload, dict):
                 continue
             video_id = payload.get("video_id")
             segments = [s for s in payload.get("segments", []) if (s.get("text") or "").strip()]
-
             if not video_id or not segments:
                 continue
-
-            docs: List[Dict[str, Any]] = []
-
             for i in range(0, len(segments), LABEL_BATCH_SIZE):
-                batch = segments[i: i + LABEL_BATCH_SIZE]
-                seg_inputs = [{"segment_id": s["segment_id"], "text": s["text"]} for s in batch]
+                all_batches.append((video_id, segments[i: i + LABEL_BATCH_SIZE], blob_name, i))
 
-                if unapplied_labels:
-                    try:
-                        gpt_results = _call_gpt(label_defs, seg_inputs)
-                    except Exception as e:
-                        logging.warning(f"GPT batch failed for {blob_name} batch {i}: {e}")
-                        gpt_results = []
-                else:
-                    gpt_results = []
+        # Process all batches in parallel
+        all_docs: List[Dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=GPT_WORKERS) as executor:
+            futures = {
+                executor.submit(
+                    _process_batch,
+                    label_defs, valid_names, strip_names, existing_index,
+                    video_id, batch, blob_name, batch_idx,
+                ): (blob_name, batch_idx)
+                for video_id, batch, blob_name, batch_idx in all_batches
+            }
+            for future in as_completed(futures):
+                try:
+                    all_docs.extend(future.result())
+                except Exception as e:
+                    b_name, b_idx = futures[future]
+                    logging.warning(f"Batch failed for {b_name} batch {b_idx}: {e}")
 
-                results_map = {r["segment_id"]: r for r in gpt_results}
-
-                for s in batch:
-                    seg_id = s["segment_id"]
-                    segment_key = f"{video_id}_{seg_id}"
-
-                    # Get existing assignments and strip labels being reprocessed/removed
-                    existing = existing_index.get(segment_key, {"pred_labels": [], "pred_label_details": []})
-                    kept_labels = [n for n in existing["pred_labels"] if n not in strip_names]
-                    kept_details = [d for d in existing["pred_label_details"] if isinstance(d, dict) and d.get("name") not in strip_names]
-
-                    # Append new GPT results
-                    result = results_map.get(seg_id, {})
-                    raw_labels = result.get("labels", [])
-                    validated = _validate_labels(raw_labels, valid_names)
-
-                    docs.append({
-                        "@search.action": "mergeOrUpload",
-                        "segment_key": segment_key,
-                        "pred_labels": kept_labels + [l["name"] for l in validated],
-                        "pred_label_details": json.dumps(kept_details + validated, ensure_ascii=False),
-                    })
-                    total_labeled += 1
-
-            for i in range(0, len(docs), INDEX_BATCH_SIZE):
-                _index_documents(docs[i: i + INDEX_BATCH_SIZE])
+        total_labeled = len(all_docs)
+        for i in range(0, len(all_docs), INDEX_BATCH_SIZE):
+            _index_documents(all_docs[i: i + INDEX_BATCH_SIZE])
 
         # Mark all active labels as applied and clear removed_labels
         for l in all_labels:
