@@ -1,5 +1,6 @@
 azure-functions
 azure-storage-blob
 dotenv
+openai
 requests
 
