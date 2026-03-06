@@ -281,10 +281,17 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         all_batches: List[Tuple] = []
         for blob_name in blob_names:
             payload = _read_json_blob(segments_container, blob_name)
-            if not isinstance(payload, dict):
+            if isinstance(payload, dict):
+                video_id = payload.get("video_id")
+                raw_segments = payload.get("segments", [])
+            elif isinstance(payload, list):
+                video_id = payload[0].get("video_id") if payload else None
+                raw_segments = payload
+            else:
+                logging.warning(f'Unexpected JSON schema: {blob_name}')
                 continue
-            video_id = payload.get("video_id")
-            segments = [s for s in payload.get("segments", []) if (s.get("text") or "").strip()]
+
+            segments = [s for s in raw_segments if (s.get("text") or "").strip()]
             if not video_id or not segments:
                 continue
             for i in range(0, len(segments), LABEL_BATCH_SIZE):
