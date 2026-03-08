@@ -128,5 +128,6 @@ def render_search_page() -> None:
 
 pg_search = st.Page(render_search_page, title="Search", icon="🔎", default=True)
 pg_labels = st.Page("pages/1_Label_Management.py", title="Label Management", icon="🏷️")
+pg_eval = st.Page("pages/2_Label_Evaluation.py", title="Label Evaluation", icon="📊")
 
-st.navigation([pg_search, pg_labels]).run()
+st.navigation([pg_search, pg_labels, pg_eval]).run()
