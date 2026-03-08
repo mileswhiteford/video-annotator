@@ -40,10 +40,11 @@ from azure.storage.blob import BlobServiceClient
 from openai import OpenAI
 
 
-LABEL_BATCH_SIZE = 20
 INDEX_BATCH_SIZE = 500
 GPT_WORKERS = 3
 SEARCH_API_VERSION = "2024-05-01-preview"
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", 20))
+
 
 
 def _blob_service() -> BlobServiceClient:
@@ -294,8 +295,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             segments = [s for s in raw_segments if (s.get("text") or "").strip()]
             if not video_id or not segments:
                 continue
-            for i in range(0, len(segments), LABEL_BATCH_SIZE):
-                all_batches.append((video_id, segments[i: i + LABEL_BATCH_SIZE], blob_name, i))
+            for i in range(0, len(segments), BATCH_SIZE):
+                all_batches.append((video_id, segments[i: i + BATCH_SIZE], blob_name, i))
 
         # Process all batches in parallel
         all_docs: List[Dict[str, Any]] = []
