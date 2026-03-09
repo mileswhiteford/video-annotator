@@ -26,14 +26,15 @@ __all__ = [
     "SEARCH_ENDPOINT", "SEARCH_KEY", "SEARCH_INDEX_NAME",
     "AZURE_STORAGE_ACCOUNT", "AZURE_STORAGE_KEY", "INPUT_CONTAINER", "SEGMENTS_CONTAINER",
     "POLL_SECONDS",
-    "ms_to_ts", "sanitize_id", "detect_url_type", "check_yt_dlp",
+    "ms_to_ts", "ms_to_seconds", "sanitize_id", "detect_url_type", "check_yt_dlp",
     "debug_check_index_schema", "get_index_schema", "check_url_fields_status",
     "submit_transcription_direct", "poll_transcription_operation", "get_transcription_from_result",
     "get_embeddings", "index_segments_direct", "process_transcription_to_segments",
-    "get_stored_videos", "delete_video_by_id",
+    "get_stored_videos", "delete_video_by_id", "get_source_url_for_video",
     "generate_video_id", "test_sas_url", "generate_sas_token_fixed",
     "upload_to_azure_blob_fixed", "upload_to_azure_blob_sdk", "save_segments_to_blob",
-    "download_youtube_audio", "process_single_video"
+    "download_youtube_audio", "process_single_video",
+    "build_video_link"
 ]
 
 # =============================================================================
@@ -70,6 +71,12 @@ def ms_to_ts(ms: int) -> str:
     h, m = divmod(m, 60)
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
+
+def ms_to_seconds(ms: int) -> int:
+    """Convert milliseconds to seconds for URL parameters."""
+    return max(0, int(ms // 1000))
+
+
 def sanitize_id(id_string: str) -> str:
     if not id_string:
         id_string = "unknown"
@@ -84,6 +91,7 @@ def sanitize_id(id_string: str) -> str:
         hash_suffix = hashlib.md5(sanitized.encode()).hexdigest()[:16]
         sanitized = sanitized[:1000] + "_" + hash_suffix
     return sanitized
+
 
 def detect_url_type(url: str) -> str:
     if not url:
@@ -105,6 +113,7 @@ def detect_url_type(url: str) -> str:
     if any(pattern in url_lower for pattern in cloud_patterns):
         return "direct"
     return "unknown"
+
 
 def check_yt_dlp() -> bool:
     try:
@@ -158,6 +167,7 @@ def debug_check_index_schema():
     except Exception as e:
         return f"Error checking index: {str(e)}"
 
+
 def get_index_schema():
     if st.session_state.get('index_schema_cache'):
         return st.session_state.index_schema_cache
@@ -167,6 +177,7 @@ def get_index_schema():
         return schema_info
     else:
         raise RuntimeError(f"Cannot fetch index schema: {schema_info}")
+
 
 def check_url_fields_status():
     if st.session_state.get('url_fields_status'):
@@ -231,6 +242,7 @@ def submit_transcription_direct(video_id: str, media_url: str) -> Dict[str, Any]
             error_msg = "Azure Speech API authentication failed. Check SPEECH_KEY."
         raise RuntimeError(error_msg)
 
+
 def poll_transcription_operation(operation_url: str) -> Dict[str, Any]:
     if not SPEECH_KEY:
         raise RuntimeError("SPEECH_KEY not configured")
@@ -243,6 +255,7 @@ def poll_transcription_operation(operation_url: str) -> Dict[str, Any]:
         return r.json()
     except requests.exceptions.RequestException as e:
         raise RuntimeError(f"Failed to poll transcription: {str(e)}")
+
 
 def get_transcription_from_result(result_data: Dict) -> Dict[str, Any]:
     if not SPEECH_KEY:
@@ -286,6 +299,7 @@ def get_embeddings(texts: list) -> list:
         return [item["embedding"] for item in result["data"]]
     except Exception as e:
         raise RuntimeError(f"Embedding failed: {str(e)}")
+
 
 def index_segments_direct(video_id: str, segments: list, source_url: str = None, source_type: str = None) -> Dict[str, Any]:
     if not SEARCH_ENDPOINT or not SEARCH_KEY:
@@ -354,6 +368,7 @@ def index_segments_direct(video_id: str, segments: list, source_url: str = None,
     except Exception as e:
         raise RuntimeError(f"Indexing failed: {str(e)}")
 
+
 def process_transcription_to_segments(transcription_data: Dict, video_id: str) -> list:
     segments = []
     for i, phrase in enumerate(transcription_data.get("recognizedPhrases", [])):
@@ -372,39 +387,95 @@ def process_transcription_to_segments(transcription_data: Dict, video_id: str) -
     return segments
 
 # =============================================================================
-# VIDEO RETRIEVAL AND DELETION
+# VIDEO RETRIEVAL AND DELETION - FIXED VERSION
 # =============================================================================
+
+def get_source_url_for_video(video_id: str) -> Optional[str]:
+    """
+    Direct lookup of source_url for a single video_id.
+    This queries the index directly for a single video's metadata.
+    """
+    if not SEARCH_ENDPOINT or not SEARCH_KEY or not SEARCH_INDEX_NAME:
+        return None
+    
+    # CRITICAL: Handle None or empty video_id
+    if not video_id or not isinstance(video_id, str):
+        return None
+    
+    search_url = f"{SEARCH_ENDPOINT}/indexes/{SEARCH_INDEX_NAME}/docs/search?api-version=2024-07-01"
+    headers = {"api-key": SEARCH_KEY, "Content-Type": "application/json"}
+    
+    # Escape single quotes in video_id
+    escaped_id = video_id.replace("'", "''")
+    
+    payload = {
+        "search": "*",
+        "filter": f"video_id eq '{escaped_id}'",
+        "select": "video_id,source_url,source_type",
+        "top": 1
+    }
+    
+    try:
+        r = requests.post(search_url, headers=headers, json=payload, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        docs = data.get("value", [])
+        
+        if docs and len(docs) > 0:
+            source_url = docs[0].get("source_url")
+            # CRITICAL: Check if source_url exists and is a non-empty string
+            if source_url and isinstance(source_url, str):
+                source_url = source_url.strip()
+                if source_url:  # Not empty after strip
+                    return source_url
+    except Exception as e:
+        # Log error but don't crash
+        print(f"Error looking up source_url for {video_id}: {e}")
+    
+    return None
+
 
 def get_stored_videos(video_id: str = None, source_type: str = None, 
                      include_missing: bool = True, limit: int = 1000) -> List[Dict]:
+    """
+    Retrieve stored videos with their source URLs.
+    FIXED: Properly handles None values and extracts source_url.
+    """
     if not SEARCH_ENDPOINT or not SEARCH_KEY:
         return []
+    
     url = f"{SEARCH_ENDPOINT}/indexes/{SEARCH_INDEX_NAME}/docs/search?api-version=2024-07-01"
     headers = {"api-key": SEARCH_KEY, "Content-Type": "application/json"}
+    
+    # Get schema to check available fields
     try:
         schema = get_index_schema()
         available_fields = {f['name'] for f in schema.get('fields', [])}
     except:
         available_fields = set()
+    
+    # Build filter - CRITICAL: Check for None and ensure string type
     filters = []
-    if video_id:
+    if video_id and isinstance(video_id, str) and video_id.strip():
         escaped_id = video_id.replace("'", "''")
         filters.append(f"video_id eq '{escaped_id}'")
-    if source_type and source_type != "All":
+    if source_type and isinstance(source_type, str) and source_type != "All":
         escaped_type = source_type.replace("'", "''")
         filters.append(f"source_type eq '{escaped_type}'")
     filter_query = " and ".join(filters) if filters else None
+    
+    # Select fields - CRITICAL: Explicitly request source_url
     select_fields = ["video_id"]
-    optional_fields = ["source_url", "source_type", "processed_at"]
-    for field in optional_fields:
-        if not available_fields or field in available_fields:
+    for field in ["source_url", "source_type", "processed_at"]:
+        if field in available_fields:
             select_fields.append(field)
+    
     all_videos = {}
     skip = 0
     batch_size = 1000
-    max_iterations = 100
+    
     try:
-        for iteration in range(max_iterations):
+        while True:
             payload = {
                 "search": "*",
                 "select": ",".join(select_fields),
@@ -416,36 +487,53 @@ def get_stored_videos(video_id: str = None, source_type: str = None,
                 payload["filter"] = filter_query
             if "processed_at" in available_fields:
                 payload["orderby"] = "processed_at desc"
+            
             r = requests.post(url, headers=headers, json=payload, timeout=30)
             r.raise_for_status()
             data = r.json()
             docs = data.get("value", [])
-            total_count = data.get("@odata.count", 0)
+            
             if not docs:
                 break
+            
             for doc in docs:
                 vid = doc.get('video_id')
                 if vid and vid not in all_videos:
+                    # CRITICAL: Safely get source_url with None check
+                    source_url = doc.get('source_url')
+                    if source_url and isinstance(source_url, str):
+                        source_url = source_url.strip()
+                    else:
+                        source_url = ''
+                    
                     all_videos[vid] = {
                         'video_id': vid,
                         'source_type': doc.get('source_type') or 'unknown',
-                        'source_url': doc.get('source_url', ''),
+                        'source_url': source_url,  # This is critical!
                         'processed_at': doc.get('processed_at', 'unknown')
                     }
+            
             skip += len(docs)
-            if skip >= total_count or len(docs) < batch_size:
+            if len(docs) < batch_size:
                 break
-        videos = list(all_videos.values())[:limit]
-        return videos
+        
+        return list(all_videos.values())[:limit]
+        
     except Exception as e:
         st.error(f"Failed to retrieve videos: {e}")
         return []
+
 
 def delete_video_by_id(video_id: str) -> bool:
     if not SEARCH_ENDPOINT or not SEARCH_KEY:
         return False
     search_url = f"{SEARCH_ENDPOINT}/indexes/{SEARCH_INDEX_NAME}/docs/search?api-version=2024-07-01"
     headers = {"api-key": SEARCH_KEY, "Content-Type": "application/json"}
+    
+    # CRITICAL: Handle None video_id
+    if not video_id or not isinstance(video_id, str):
+        return False
+    
     escaped_id = video_id.replace("'", "''")
     payload = {
         "search": "*",
@@ -490,12 +578,14 @@ def generate_video_id(filename: str) -> str:
     hash_suffix = hashlib.md5(clean_name.encode()).hexdigest()[:8]
     return f"vid_{clean_name[:50]}_{hash_suffix}"
 
+
 def test_sas_url(sas_url: str) -> Tuple[bool, str]:
     try:
         r = requests.head(sas_url, timeout=10, allow_redirects=True)
         return (r.status_code == 200, f"HTTP {r.status_code}")
     except Exception as e:
         return (False, str(e))
+
 
 def generate_sas_token_fixed(blob_name: str, expiry_hours: int = 24) -> Optional[str]:
     if not AZURE_STORAGE_KEY:
@@ -522,6 +612,7 @@ def generate_sas_token_fixed(blob_name: str, expiry_hours: int = 24) -> Optional
     except Exception as e:
         st.error(f"SAS generation error: {e}")
         return None
+
 
 def upload_to_azure_blob_fixed(file_bytes: bytes, blob_name: str) -> Tuple[Optional[str], Optional[str]]:
     if not AZURE_STORAGE_KEY:
@@ -560,6 +651,7 @@ def upload_to_azure_blob_fixed(file_bytes: bytes, blob_name: str) -> Tuple[Optio
     except Exception as e:
         return None, f"Upload error: {str(e)}"
 
+
 def upload_to_azure_blob_sdk(file_bytes: bytes, blob_name: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
@@ -596,6 +688,7 @@ def upload_to_azure_blob_sdk(file_bytes: bytes, blob_name: str) -> Tuple[Optiona
     except Exception as e:
         return None, f"SDK upload failed: {str(e)}"
 
+
 def save_segments_to_blob(video_id: str, segments: list) -> str:
     if not AZURE_STORAGE_KEY:
         raise RuntimeError("Azure Storage key not configured")
@@ -623,6 +716,7 @@ def save_segments_to_blob(video_id: str, segments: list) -> str:
     r = requests.put(url, data=json_bytes, headers=headers, timeout=60)
     r.raise_for_status()
     return blob_name
+
 
 def download_youtube_audio(youtube_url: str, output_path: str, 
                           progress_callback=None) -> Tuple[Optional[str], Optional[str]]:
@@ -795,3 +889,76 @@ def process_single_video(url: str, custom_id: Optional[str] = None,
         import traceback
         result["error"] += f"\n{traceback.format_exc()}"
     return result
+
+# =============================================================================
+# VIDEO LINK GENERATION - FIXED VERSION
+# =============================================================================
+
+def build_video_link(video_id: str, start_ms: int, source_url: Optional[str] = None,
+                    source_type: Optional[str] = None) -> Tuple[str, str, bool]:
+    """
+    Build correct video link with time marker for various media types.
+    
+    Returns:
+        Tuple of (url, description, supports_time_marker)
+    """
+    start_sec = ms_to_seconds(start_ms)
+    
+    # Priority 1: Use source_url if provided and valid
+    actual_source = None
+    if source_url and isinstance(source_url, str):
+        actual_source = source_url.strip()
+    
+    # Priority 2: If no source_url, try to look it up
+    if not actual_source and video_id and isinstance(video_id, str):
+        try:
+            actual_source = get_source_url_for_video(video_id)
+        except Exception:
+            actual_source = None
+    
+    # Priority 3: Use source_url if found
+    if actual_source:
+        source_lower = actual_source.lower()
+        
+        # YouTube
+        if "youtube.com" in source_lower or "youtu.be" in source_lower:
+            base = re.sub(r'[?&](t|start)=\d+[s]?', '', actual_source)
+            sep = "&" if "?" in base else "?"
+            return (f"{base}{sep}t={start_sec}s", "YouTube", True)
+        
+        # Box - no time markers supported
+        if "box.com" in source_lower or "boxcloud.com" in source_lower:
+            return (actual_source, "Box (.m4a)", False)
+        
+        # Vimeo
+        if "vimeo.com" in source_lower:
+            base = actual_source.split("#")[0].split("?")[0]
+            return (f"{base}#t={start_sec}s", "Vimeo", True)
+        
+        # Generic direct URL
+        return (actual_source, f"Direct ({source_type or 'link'})", False)
+    
+    # Priority 4: Try to parse from video_id field for YouTube
+    if video_id and isinstance(video_id, str):
+        vid_lower = video_id.lower()
+        
+        # YouTube watch pattern: vid_watchvVIDEOID...
+        if "watchv" in vid_lower:
+            match = re.search(r'watchv([a-zA-Z0-9_-]{11})', video_id)
+            if match:
+                yt_id = match.group(1)
+                return (f"https://www.youtube.com/watch?v={yt_id}&t={start_sec}s", "YouTube (parsed)", True)
+        
+        # youtu.be pattern: vid_youtu_beVIDEOID
+        if "youtu_be" in vid_lower:
+            match = re.search(r'youtu_be([a-zA-Z0-9_-]{11})', video_id)
+            if match:
+                yt_id = match.group(1)
+                return (f"https://youtu.be/{yt_id}?t={start_sec}s", "YouTube (parsed)", True)
+        
+        # Direct YouTube ID (11 chars)
+        if len(video_id) == 11:
+            return (f"https://www.youtube.com/watch?v={video_id}&t={start_sec}s", "YouTube (ID)", True)
+    
+    # Fallback: cannot generate link
+    return ("#", "No source available", False)
