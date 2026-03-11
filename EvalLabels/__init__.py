@@ -91,25 +91,25 @@ def _call_gpt(label_defs: List[Dict], seg_inputs: List[Dict]) -> List[Dict]:
     return json.loads(resp.output_text).get("results", [])
 
 
-def _compute_metrics(test_cases: List[Dict], predictions: List[List[str]]) -> Dict:
+def _compute_metrics(expected_list: List[List[str]], predictions: List[List[str]]) -> Dict:
     # Collect all label names that appear in annotations
     all_labels = set()
-    for tc in test_cases:
-        all_labels.update(tc.get("expected_labels", []))
+    for expected in expected_list:
+        all_labels.update(expected)
 
     per_label = {}
     for label in sorted(all_labels):
         tp = sum(
-            1 for tc, pred in zip(test_cases, predictions)
-            if label in tc["expected_labels"] and label in pred
+            1 for expected, pred in zip(expected_list, predictions)
+            if label in expected and label in pred
         )
         fp = sum(
-            1 for tc, pred in zip(test_cases, predictions)
-            if label not in tc["expected_labels"] and label in pred
+            1 for expected, pred in zip(expected_list, predictions)
+            if label not in expected and label in pred
         )
         fn = sum(
-            1 for tc, pred in zip(test_cases, predictions)
-            if label in tc["expected_labels"] and label not in pred
+            1 for expected, pred in zip(expected_list, predictions)
+            if label in expected and label not in pred
         )
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
@@ -203,7 +203,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 "details": validated,
             })
 
-        metrics = _compute_metrics(test_cases, predictions)
+        filtered_expected = [row["expected"] for row in rows]
+        metrics = _compute_metrics(filtered_expected, predictions)
 
         return func.HttpResponse(
             json.dumps({"rows": rows, "metrics": metrics, "unknown_labels": list(unknown_labels)}, ensure_ascii=False),
