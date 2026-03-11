@@ -82,6 +82,13 @@ with st.spinner(f"Running GPT on {len(test_cases)} rows..."):
 
 rows = result.get("rows", [])
 metrics = result.get("metrics", {})
+unknown_labels = result.get("unknown_labels", [])
+
+if unknown_labels:
+    st.warning(
+        "The following labels from your CSV were **not found in the label library** and were ignored during evaluation:\n\n"
+        + ", ".join(f"`{l}`" for l in unknown_labels)
+    )
 
 # --- Overall metrics ---
 st.subheader("Overall Metrics")

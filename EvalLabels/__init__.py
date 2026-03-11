@@ -71,7 +71,7 @@ def _call_gpt(label_defs: List[Dict], seg_inputs: List[Dict]) -> List[Dict]:
         '  - "rationale": a brief explanation of your decision either way\n\n'
         "Return:\n"
         '{"results": [\n'
-        '  {"segment_id": "0", "labels": [\n'
+        '  {"segment_id": "0000", "labels": [\n'
         '    {"name": "LabelName", "applied": true, "rationale": "explanation"},\n'
         '    {"name": "OtherLabel", "applied": false, "rationale": "explanation"}\n'
         "  ]}\n"
@@ -120,7 +120,8 @@ def _compute_metrics(test_cases: List[Dict], predictions: List[List[str]]) -> Di
             "recall": round(recall, 3),
             "f1": round(f1, 3),
         }
-
+    
+    
     macro_f1 = sum(m["f1"] for m in per_label.values()) / len(per_label) if per_label else 0.0
     total_tp = sum(m["tp"] for m in per_label.values())
     total_fp = sum(m["fp"] for m in per_label.values())
@@ -180,12 +181,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         # Build per-row results
         predictions: List[List[str]] = []
         rows = []
+        unknown_labels: set = set()
         for idx, tc in enumerate(test_cases):
             result = results_map.get(str(idx), {})
             gpt_labels = result.get("labels", [])
             validated = [l for l in gpt_labels if isinstance(l, dict) and l.get("name") in valid_names]
             predicted = [l["name"] for l in validated if l.get("applied", False)]
-            expected = tc.get("expected_labels", [])
+            raw_expected = tc.get("expected_labels", [])
+            row_unknown = [l for l in raw_expected if l not in valid_names]
+            unknown_labels.update(row_unknown)
+            expected = [l for l in raw_expected if l in valid_names]
 
             predictions.append(predicted)
             rows.append({
@@ -201,7 +206,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         metrics = _compute_metrics(test_cases, predictions)
 
         return func.HttpResponse(
-            json.dumps({"rows": rows, "metrics": metrics}, ensure_ascii=False),
+            json.dumps({"rows": rows, "metrics": metrics, "unknown_labels": list(unknown_labels)}, ensure_ascii=False),
             mimetype="application/json",
             status_code=200,
         )
