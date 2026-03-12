@@ -23,19 +23,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import azure.functions as func
-import requests
 from azure.storage.blob import BlobServiceClient
-
-
-def _trigger_labeling() -> None:
-    """Fire-and-forget call to LabelSegments after any label change."""
-    url = os.environ.get("LABEL_SEGMENTS_URL", "")
-    if not url:
-        return
-    try:
-        requests.post(url, json={}, timeout=600)
-    except Exception:
-        pass
+from azure.storage.queue import QueueClient
 
 
 def _blob_service() -> BlobServiceClient:
@@ -77,6 +66,74 @@ def _write_label_json(library: Dict[str, Any]) -> str:
     return f"{container}/label_library.json"
 
 
+def _read_labeling_status() -> Optional[Dict]:
+    try:
+        service = _blob_service()
+        container = os.environ.get("LABELS_CONTAINER", "labels")
+        bc = service.get_blob_client(container=container, blob="labeling_status.json")
+        return json.loads(bc.download_blob().readall())
+    except Exception:
+        return None
+
+
+def _enqueue_labeling_job(library: Dict[str, Any]) -> None:
+    """List all segment blobs, write a status blob, and enqueue one message per video."""
+    all_labels = library.get("labels", [])
+    active_labels = [l for l in all_labels if l.get("is_active", True)]
+    unapplied_labels = [l for l in active_labels if not l.get("applied", False)]
+    removed_label_names = set(library.get("removed_labels", []))
+
+    if not unapplied_labels and not removed_label_names:
+        return
+
+    label_defs = [{"name": l["name"], "description": l["description"]} for l in unapplied_labels]
+    valid_names = [l["name"] for l in unapplied_labels]
+    strip_names = list({l["name"] for l in unapplied_labels} | removed_label_names)
+
+    service = _blob_service()
+    segments_container = os.environ.get("SEGMENTS_CONTAINER", "segments")
+    cc = service.get_container_client(segments_container)
+    blob_names = [b.name for b in cc.list_blobs() if b.name.endswith(".json")]
+    total = len(blob_names)
+
+    if total == 0:
+        return
+
+    labels_container = os.environ.get("LABELS_CONTAINER", "labels")
+    status = {
+        "status": "running",
+        "total": total,
+        "completed": 0,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    status_bc = service.get_blob_client(container=labels_container, blob="labeling_status.json")
+    status_bc.upload_blob(json.dumps(status, ensure_ascii=False), overwrite=True)
+
+    account = os.environ["AZURE_STORAGE_ACCOUNT"]
+    key = os.environ["AZURE_STORAGE_KEY"]
+    queue_name = os.environ.get("LABEL_QUEUE_NAME", "label-jobs")
+
+    queue_client = QueueClient(
+        account_url=f"https://{account}.queue.core.windows.net",
+        queue_name=queue_name,
+        credential=key,
+    )
+    try:
+        queue_client.create_queue()
+    except Exception:
+        pass  # Already exists
+
+    for blob_name in blob_names:
+        message = json.dumps({
+            "blob_name": blob_name,
+            "label_defs": label_defs,
+            "valid_names": valid_names,
+            "strip_names": strip_names,
+            "total": total,
+        })
+        queue_client.send_message(message)
+
+
 def _validate_label_name(name: str, library: Dict[str, Any], exclude_id: Optional[str] = None) -> bool:
     """Check if label name is unique among active labels"""
     for label in library.get("labels", []):
@@ -97,6 +154,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             include_inactive = req.params.get("include_inactive", "false").lower() == "true"
             if not include_inactive:
                 library["labels"] = [l for l in library["labels"] if l.get("is_active", True)]
+
+            status = _read_labeling_status()
+            if status:
+                library["labeling_status"] = status
 
             return func.HttpResponse(
                 json.dumps(library, ensure_ascii=False),
@@ -144,7 +205,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             library["labels"].append(new_label)
             library["last_updated"] = now
             _write_label_json(library)
-            threading.Thread(target=_trigger_labeling, daemon=True).start()
+            threading.Thread(target=_enqueue_labeling_job, args=(library,), daemon=True).start()
 
             return func.HttpResponse(
                 json.dumps(new_label, ensure_ascii=False),
@@ -198,7 +259,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             label["updated_at"] = datetime.now(timezone.utc).isoformat()
             library["last_updated"] = label["updated_at"]
             _write_label_json(library)
-            threading.Thread(target=_trigger_labeling, daemon=True).start()
+            threading.Thread(target=_enqueue_labeling_job, args=(library,), daemon=True).start()
 
             return func.HttpResponse(
                 json.dumps(label, ensure_ascii=False),
@@ -232,7 +293,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             label["updated_at"] = datetime.now(timezone.utc).isoformat()
             library["last_updated"] = label["updated_at"]
             _write_label_json(library)
-            threading.Thread(target=_trigger_labeling, daemon=True).start()
+            threading.Thread(target=_enqueue_labeling_job, args=(library,), daemon=True).start()
 
             return func.HttpResponse(
                 json.dumps({"success": True, "message": "Label deactivated"}),
@@ -250,7 +311,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     count += 1
             library["last_updated"] = now
             _write_label_json(library)
-            threading.Thread(target=_trigger_labeling, daemon=True).start()
+            threading.Thread(target=_enqueue_labeling_job, args=(library,), daemon=True).start()
 
             return func.HttpResponse(
                 json.dumps({"message": f"Reset {count} labels, re-labeling queued."}),
