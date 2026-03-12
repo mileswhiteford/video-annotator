@@ -64,7 +64,13 @@ library = get_label_library()
 labels = library.get("labels", []) if isinstance(library, dict) else []
 _pending = any(not l.get("applied", True) for l in labels)
 if _pending:
-    st.warning("Labeling in progress — search results will update once complete. Refresh to check status.")
+    _status = library.get("labeling_status")
+    if _status and _status.get("status") == "running":
+        _completed = _status.get("completed", 0)
+        _total = _status.get("total", 0)
+        st.warning(f"Labeling in progress — {_completed}/{_total} videos labeled. Refresh to check status.")
+    else:
+        st.warning("Labeling in progress — search results will update once complete. Refresh to check status.")
 
 # --- Re-run all labels ---
 with st.expander("Re-run all labels"):
