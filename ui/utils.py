@@ -33,7 +33,7 @@ __all__ = [
     "get_stored_videos", "delete_video_by_id", "get_source_url_for_video",
     "generate_video_id", "test_sas_url", "generate_sas_token_fixed",
     "upload_to_azure_blob_fixed", "upload_to_azure_blob_sdk", "save_segments_to_blob",
-    "download_youtube_audio", "download_box_audio", "process_single_video",
+    "download_youtube_audio", "download_box_audio", "get_box_audio_url", "fetch_box_audio_bytes", "process_single_video",
     "build_video_link"
 ]
 
@@ -529,16 +529,26 @@ def delete_video_by_id(video_id: str) -> bool:
         return False
     if not video_id or not isinstance(video_id, str):
         return False
+
+    # Get the key field name first so we can include it in the select
+    try:
+        schema    = get_index_schema()
+        key_field = schema.get('key_field', 'id')
+    except Exception:
+        key_field = 'id'
+
     search_url = (
         f"{SEARCH_ENDPOINT}/indexes/{SEARCH_INDEX_NAME}"
         f"/docs/search?api-version=2024-07-01"
     )
-    headers = {"api-key": SEARCH_KEY, "Content-Type": "application/json"}
+    headers    = {"api-key": SEARCH_KEY, "Content-Type": "application/json"}
     escaped_id = video_id.replace("'", "''")
+
+    # CRITICAL: include the key field in select so we can build delete actions
     payload = {
         "search": "*",
         "filter": f"video_id eq '{escaped_id}'",
-        "select": "video_id",
+        "select": f"{key_field},video_id",
         "top": 1000
     }
     try:
@@ -547,15 +557,16 @@ def delete_video_by_id(video_id: str) -> bool:
         docs = r.json().get("value", [])
         if not docs:
             return False
-        schema = get_index_schema()
-        key_field = schema.get('key_field', 'id')
+
         delete_docs = []
         for doc in docs:
             doc_key = doc.get(key_field) or doc.get('id')
             if doc_key:
                 delete_docs.append({"@search.action": "delete", key_field: doc_key})
+
         if not delete_docs:
             return False
+
         delete_url = (
             f"{SEARCH_ENDPOINT}/indexes/{SEARCH_INDEX_NAME}"
             f"/docs/index?api-version=2024-07-01"
@@ -1121,6 +1132,112 @@ def process_single_video(
 # =============================================================================
 # VIDEO LINK GENERATION
 # =============================================================================
+
+def get_box_audio_url(box_url: str) -> Tuple[Optional[str], bool]:
+    """
+    Convert a Box viewer URL to a direct audio URL suitable for fetching bytes.
+
+    Returns:
+        (audio_url, is_embeddable)
+
+    Uses the index.php download endpoint which is known to work for shared files.
+    Falls back to /content and /shared/static patterns.
+    """
+    from urllib.parse import urlparse, parse_qs
+
+    if not box_url or "box.com" not in box_url.lower():
+        return None, False
+
+    try:
+        parsed = urlparse(box_url.strip())
+        qs     = parse_qs(parsed.query)
+        base   = f"{parsed.scheme}://{parsed.netloc}"
+
+        file_id_match = re.search(r'/file/(\d+)', parsed.path)
+        shared_token  = qs.get('s', [None])[0]
+
+        if file_id_match and shared_token:
+            file_id = file_id_match.group(1)
+            # Use index.php — the same endpoint that download_box_audio uses
+            # and that we know works for shared files
+            url = (
+                f"{base}/index.php"
+                f"?rm=box_download_shared_file"
+                f"&file_id=f_{file_id}"
+                f"&shared_name={shared_token}"
+            )
+            return url, True
+
+        if '/shared/static/' in box_url.lower():
+            return box_url.strip(), True
+
+    except Exception:
+        pass
+
+    return None, False
+
+
+def fetch_box_audio_bytes(box_url: str) -> Optional[bytes]:
+    """
+    Fetch audio bytes from a Box shared file URL for embedding in st.audio().
+    Tries multiple endpoints in order, same strategy as download_box_audio.
+    Returns None if all attempts fail or return HTML.
+    """
+    from urllib.parse import urlparse, parse_qs
+
+    if not box_url:
+        return None
+
+    try:
+        parsed = urlparse(box_url.strip())
+        qs     = parse_qs(parsed.query)
+        base   = f"{parsed.scheme}://{parsed.netloc}"
+
+        file_id_match = re.search(r'/file/(\d+)', parsed.path)
+        shared_token  = qs.get('s', [None])[0]
+
+        candidates = []
+        if file_id_match and shared_token:
+            file_id = file_id_match.group(1)
+            candidates.append(
+                f"{base}/index.php"
+                f"?rm=box_download_shared_file"
+                f"&file_id=f_{file_id}"
+                f"&shared_name={shared_token}"
+            )
+            candidates.append(
+                f"{base}/file/{file_id}/content?s={shared_token}"
+            )
+        elif '/shared/static/' in box_url.lower():
+            candidates.append(box_url.strip())
+        else:
+            candidates.append(box_url.strip())
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+        }
+
+        for url in candidates:
+            try:
+                resp = requests.get(
+                    url, headers=headers,
+                    timeout=60, allow_redirects=True
+                )
+                ct = resp.headers.get("Content-Type", "")
+                if resp.status_code == 200 and "text/html" not in ct:
+                    return resp.content
+            except Exception:
+                continue
+
+    except Exception:
+        pass
+
+    return None
+
 
 def build_video_link(
     video_id: str, start_ms: int,
