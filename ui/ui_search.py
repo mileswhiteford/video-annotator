@@ -33,6 +33,7 @@ from dotenv import load_dotenv
 from utils import ms_to_ts, SEARCH_FN_URL, get_stored_videos, build_video_link, get_box_audio_url, fetch_box_audio_bytes
 
 load_dotenv()
+MANAGE_LABELS_URL = os.environ.get("MANAGE_LABELS_URL", "")
 
 st.set_page_config(page_title="Video Segment Search", layout="wide")
 
@@ -73,6 +74,19 @@ def load_all_video_metadata() -> Dict[str, Dict]:
     except Exception as e:
         st.error(f"Failed to load video metadata: {e}")
         return {}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_label_names() -> list:
+    if not MANAGE_LABELS_URL:
+        return []
+    try:
+        r = requests.get(MANAGE_LABELS_URL, timeout=30)
+        if r.status_code >= 400:
+            return []
+        return [l["name"] for l in r.json().get("labels", [])]
+    except Exception:
+        return []
 
 
 # =============================================================================
@@ -242,6 +256,12 @@ def render_search_page() -> None:
         top  = st.slider("Top", 1, 50, 10)
         k    = st.slider("Vector k (hybrid/vector)", 5, 200, 40)
         video_id_filter = st.text_input("Filter by video_id (optional)", value="")
+        label_names = get_label_names()
+        selected_labels = st.multiselect("Filter by labels (optional)", label_names)
+        if selected_labels:
+            label_match = st.radio("Match labels", ["any", "all"], horizontal=True)
+        else:
+            label_match = "any"
 
         cache_size = len(st.session_state['video_metadata_cache'])
         st.caption(f"📦 {cache_size} videos in metadata cache")
@@ -255,7 +275,7 @@ def render_search_page() -> None:
 
     # ── Search bar ────────────────────────────────────────────────────────
     q  = st.text_input("Query", value="", placeholder="e.g., measles misinformation")
-    go = st.button("Search", type="primary", disabled=(not q.strip()))
+    go = st.button("Search", type="primary", disabled=(not q.strip() and not selected_labels))
 
     if not go:
         return
@@ -265,6 +285,9 @@ def render_search_page() -> None:
         payload["k"] = k
     if video_id_filter.strip():
         payload["video_id"] = video_id_filter.strip()
+    if selected_labels:
+        payload["labels"] = selected_labels
+        payload["label_match"] = label_match
 
     try:
         with st.spinner("Searching..."):
@@ -319,18 +342,9 @@ def render_search_page() -> None:
 # =============================================================================
 pg_search = st.Page(render_search_page, title="Search",             icon="🔎", default=True)
 pg_labels = st.Page("pages/1_Label_Management.py", title="Label Management", icon="🏷️")
-
 pg_upload = st.Page("pages/2_Upload.py",            title="Upload",           icon="⬆️")
 pg_manage = st.Page("pages/3_Manage_Videos.py",     title="Manage Videos",    icon="📚")
-
-
-pg_upload = st.Page("pages/2_Upload.py", title="Upload", icon="⬆️")
-pg_manage = st.Page("pages/3_Manage_Videos.py", title="Manage Videos", icon="📚")
-
+pg_eval   = st.Page("pages/5_Label_Evaluation.py",  title="Label Evaluation", icon="📊")
 pg_diag   = st.Page("pages/6_System_Diagnostics.py", title="System Diagnostics", icon="⚙️")
 
 st.navigation([pg_search, pg_labels, pg_upload, pg_manage, pg_eval, pg_diag]).run()
-pg_eval = st.Page("pages/5_Label_Evaluation.py", title="Label Evaluation", icon="📊")
-
-st.navigation([pg_search, pg_labels, pg_eval]).run()
-
