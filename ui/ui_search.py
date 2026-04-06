@@ -1,53 +1,46 @@
 """
-ui_search.py - Streamlit Web Interface for Video Segment Search
-
-This Streamlit application provides a user-friendly web interface for searching
-indexed video segments. Users can:
-- Enter text queries to search across all indexed segments
-- Choose search mode (keyword, vector, or hybrid)
-- Filter results by video_id and adjust result count
-- View segment text with timestamps and relevance scores
-
-Architecture Role:
-- Frontend user interface for the video annotation system
-- Deployed as Azure Container App (video-annotator-ui)
-- Calls SearchSegments Azure Function for all search operations
-- Displays results with formatted timestamps and metadata
-
-Deployment:
-  - Local: python -m streamlit run ui_search.py
-  - Azure: Deployed as Container App (see ui/README.md)
-
-Configuration (via .env or Container App env vars):
-  - SEARCH_FN_URL: SearchSegments function endpoint
-  - DEFAULT_MODE: Default search mode (hybrid/keyword/vector)
-  - DEFAULT_TOP: Default number of results
-  - DEFAULT_K: Default vector recall depth
+ui_search.py - Main Streamlit entry point
+Uses multipage navigation (pages folder) and shared utilities from utils.py
 """
 
 import os
 import requests
 import streamlit as st
+from datetime import datetime, timezone, timedelta
+from typing import Optional, Dict, Any, Tuple, List
 from dotenv import load_dotenv
 
-# Load .env locally (Container Apps/App Service will use real env vars)
-load_dotenv()
+# Import shared utilities (must be in same directory)
+from utils import ms_to_ts, SEARCH_FN_URL
 
-SEARCH_FN_URL = os.environ["SEARCH_FN_URL"]
-DEFAULT_MODE = os.environ.get("DEFAULT_MODE", "hybrid")
-DEFAULT_TOP = int(os.environ.get("DEFAULT_TOP", "10"))
-DEFAULT_K = int(os.environ.get("DEFAULT_K", "40"))
+load_dotenv()
 
 st.set_page_config(page_title="Video Segment Search", layout="wide")
 
+# =============================================================================
+# SESSION STATE INITIALIZATION
+# =============================================================================
+# All session variables used across pages must be initialized here
+defaults = {
+    'yt_url_value': "",
+    'batch_results': [],
+    'batch_processing': False,
+    'index_schema_cache': None,
+    'stored_videos_cache': None,
+    'url_fields_status': None,
+    'debug_info': {},
+    'video_to_delete': None,
+    'delete_success': False,
+    'videos_loaded': False,
+    'debug_poll_url': None
+}
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
-def ms_to_ts(ms: int) -> str:
-    s = max(0, int(ms // 1000))
-    m, s = divmod(s, 60)
-    h, m = divmod(m, 60)
-    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
-
-
+# -----------------------------------------------------------------------------
+# Search‑specific functions
+# -----------------------------------------------------------------------------
 def call_search_api(payload: dict) -> dict:
     r = requests.post(
         SEARCH_FN_URL,
@@ -68,12 +61,10 @@ def render_search_page() -> None:
         mode = st.selectbox(
             "Mode",
             ["keyword", "hybrid", "vector"],
-            index=["keyword", "hybrid", "vector"].index(DEFAULT_MODE)
-            if DEFAULT_MODE in ("keyword", "hybrid", "vector")
-            else 1,
+            index=1
         )
-        top = st.slider("Top", 1, 50, DEFAULT_TOP)
-        k = st.slider("Vector k (hybrid/vector)", 5, 200, DEFAULT_K)
+        top = st.slider("Top", 1, 50, 10)
+        k = st.slider("Vector k (hybrid/vector)", 5, 200, 40)
         video_id_filter = st.text_input("Filter by video_id (optional)", value="")
         st.caption("Tip: keep k ~ 4×top for hybrid.")
 
@@ -112,11 +103,9 @@ def render_search_page() -> None:
 
             with st.expander(header, expanded=(i <= 3)):
                 st.write(h.get("text", ""))
-
                 labels = h.get("pred_labels") or []
                 conf = h.get("pred_confidence")
                 rationale = h.get("pred_rationale")
-
                 if labels or conf is not None or rationale:
                     if labels:
                         st.write("**Labels:**", ", ".join(labels))
@@ -126,8 +115,19 @@ def render_search_page() -> None:
                         st.write("**Rationale:**", rationale)
 
 
+# -----------------------------------------------------------------------------
+# Multipage navigation
+# -----------------------------------------------------------------------------
 pg_search = st.Page(render_search_page, title="Search", icon="🔎", default=True)
 pg_labels = st.Page("pages/1_Label_Management.py", title="Label Management", icon="🏷️")
-pg_eval = st.Page("pages/2_Label_Evaluation.py", title="Label Evaluation", icon="📊")
+
+pg_upload = st.Page("pages/2_Upload.py", title="Upload", icon="⬆️")
+pg_manage = st.Page("pages/3_Manage_Videos.py", title="Manage Videos", icon="📚")
+pg_diag   = st.Page("pages/4_System_Diagnostics.py", title="System Diagnostics", icon="⚙️")
+
+st.navigation([pg_search, pg_labels, pg_upload, pg_manage, pg_diag]).run()
+=======
+pg_eval = st.Page("pages/5_Label_Evaluation.py", title="Label Evaluation", icon="📊")
 
 st.navigation([pg_search, pg_labels, pg_eval]).run()
+

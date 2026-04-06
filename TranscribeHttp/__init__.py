@@ -42,7 +42,7 @@ def _cfg() -> SpeechConfig:
     return SpeechConfig(
         key=os.environ["SPEECH_KEY"],
         endpoint=endpoint.rstrip("/"),
-        api_version=os.environ.get("SPEECH_API_VERSION", "2025-10-15"),
+        api_version=os.environ.get("SPEECH_API_VERSION", "2024-11-15"),
     )
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
