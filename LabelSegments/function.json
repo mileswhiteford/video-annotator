@@ -1,16 +1,11 @@
 {
   "bindings": [
     {
-      "authLevel": "function",
-      "type": "httpTrigger",
+      "type": "queueTrigger",
       "direction": "in",
-      "name": "req",
-      "methods": ["post"]
-    },
-    {
-      "type": "http",
-      "direction": "out",
-      "name": "$return"
+      "name": "msg",
+      "queueName": "%LABEL_QUEUE_NAME%",
+      "connection": "AzureWebJobsStorage"
     }
   ]
 }
