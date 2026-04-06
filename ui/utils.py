@@ -26,14 +26,15 @@ __all__ = [
     "SEARCH_ENDPOINT", "SEARCH_KEY", "SEARCH_INDEX_NAME",
     "AZURE_STORAGE_ACCOUNT", "AZURE_STORAGE_KEY", "INPUT_CONTAINER", "SEGMENTS_CONTAINER",
     "POLL_SECONDS",
-    "ms_to_ts", "sanitize_id", "detect_url_type", "check_yt_dlp",
+    "ms_to_ts", "ms_to_seconds", "sanitize_id", "detect_url_type", "check_yt_dlp",
     "debug_check_index_schema", "get_index_schema", "check_url_fields_status",
     "submit_transcription_direct", "poll_transcription_operation", "get_transcription_from_result",
     "get_embeddings", "index_segments_direct", "process_transcription_to_segments",
-    "get_stored_videos", "delete_video_by_id",
+    "get_stored_videos", "delete_video_by_id", "get_source_url_for_video",
     "generate_video_id", "test_sas_url", "generate_sas_token_fixed",
     "upload_to_azure_blob_fixed", "upload_to_azure_blob_sdk", "save_segments_to_blob",
-    "download_youtube_audio", "process_single_video"
+    "download_youtube_audio", "download_box_audio", "get_box_audio_url", "fetch_box_audio_bytes", "process_single_video",
+    "build_video_link"
 ]
 
 # =============================================================================
@@ -70,6 +71,12 @@ def ms_to_ts(ms: int) -> str:
     h, m = divmod(m, 60)
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
+
+def ms_to_seconds(ms: int) -> int:
+    """Convert milliseconds to seconds for URL parameters."""
+    return max(0, int(ms // 1000))
+
+
 def sanitize_id(id_string: str) -> str:
     if not id_string:
         id_string = "unknown"
@@ -85,10 +92,17 @@ def sanitize_id(id_string: str) -> str:
         sanitized = sanitized[:1000] + "_" + hash_suffix
     return sanitized
 
+
 def detect_url_type(url: str) -> str:
+    """
+    Classify a URL into one of: "youtube", "box", "direct", "unknown".
+    "box" covers all box.com and boxcloud.com URLs regardless of subdomain.
+    """
     if not url:
         return "unknown"
     url_lower = str(url).lower().strip()
+
+    # YouTube
     youtube_patterns = [
         r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)',
         r'youtube\.com\/watch\?v=',
@@ -98,19 +112,28 @@ def detect_url_type(url: str) -> str:
     for pattern in youtube_patterns:
         if re.search(pattern, url_lower):
             return "youtube"
+
+    # Box — must be checked before generic "direct" so box URLs aren't misclassified.
+    # Covers: box.com, app.box.com, tulane.app.box.com, boxcloud.com, etc.
+    if "box.com" in url_lower or "boxcloud.com" in url_lower:
+        return "box"
+
+    # Generic direct media URL (file extension or known cloud storage)
     media_extensions = ['.mp4', '.m4a', '.mp3', '.wav', '.mov', '.avi', '.mkv', '.webm']
     if any(url_lower.endswith(ext) for ext in media_extensions):
         return "direct"
-    cloud_patterns = ['box.com', 'drive.google.com', 'dropbox.com', 'onedrive']
+    cloud_patterns = ['drive.google.com', 'dropbox.com', 'onedrive']
     if any(pattern in url_lower for pattern in cloud_patterns):
         return "direct"
+
     return "unknown"
+
 
 def check_yt_dlp() -> bool:
     try:
         result = subprocess.run(["which", "yt-dlp"], capture_output=True, text=True)
         return result.returncode == 0
-    except:
+    except Exception:
         return False
 
 # =============================================================================
@@ -158,6 +181,7 @@ def debug_check_index_schema():
     except Exception as e:
         return f"Error checking index: {str(e)}"
 
+
 def get_index_schema():
     if st.session_state.get('index_schema_cache'):
         return st.session_state.index_schema_cache
@@ -167,6 +191,7 @@ def get_index_schema():
         return schema_info
     else:
         raise RuntimeError(f"Cannot fetch index schema: {schema_info}")
+
 
 def check_url_fields_status():
     if st.session_state.get('url_fields_status'):
@@ -182,7 +207,7 @@ def check_url_fields_status():
             }
             st.session_state.url_fields_status = result
             return result
-    except:
+    except Exception:
         pass
     return {
         'fields_exist': False,
@@ -198,7 +223,10 @@ def check_url_fields_status():
 def submit_transcription_direct(video_id: str, media_url: str) -> Dict[str, Any]:
     if not SPEECH_KEY:
         raise RuntimeError("SPEECH_KEY not configured")
-    endpoint = f"https://{SPEECH_REGION}.api.cognitive.microsoft.com/speechtotext/transcriptions:submit?api-version={SPEECH_API_VERSION}"
+    endpoint = (
+        f"https://{SPEECH_REGION}.api.cognitive.microsoft.com"
+        f"/speechtotext/transcriptions:submit?api-version={SPEECH_API_VERSION}"
+    )
     headers = {
         "Ocp-Apim-Subscription-Key": SPEECH_KEY,
         "Content-Type": "application/json"
@@ -225,11 +253,12 @@ def submit_transcription_direct(video_id: str, media_url: str) -> Dict[str, Any]
         if not operation_url:
             raise RuntimeError("No operation URL returned")
         return {"operation_url": operation_url, "video_id": video_id}
-    except requests.exceptions.HTTPError as e:
+    except requests.exceptions.HTTPError:
         error_msg = f"Speech API error {r.status_code}: {r.text}"
         if r.status_code == 401:
             error_msg = "Azure Speech API authentication failed. Check SPEECH_KEY."
         raise RuntimeError(error_msg)
+
 
 def poll_transcription_operation(operation_url: str) -> Dict[str, Any]:
     if not SPEECH_KEY:
@@ -243,6 +272,7 @@ def poll_transcription_operation(operation_url: str) -> Dict[str, Any]:
         return r.json()
     except requests.exceptions.RequestException as e:
         raise RuntimeError(f"Failed to poll transcription: {str(e)}")
+
 
 def get_transcription_from_result(result_data: Dict) -> Dict[str, Any]:
     if not SPEECH_KEY:
@@ -276,7 +306,10 @@ def get_transcription_from_result(result_data: Dict) -> Dict[str, Any]:
 def get_embeddings(texts: list) -> list:
     if not AZURE_OPENAI_ENDPOINT or not AZURE_OPENAI_KEY:
         raise RuntimeError("Azure OpenAI not configured")
-    url = f"{AZURE_OPENAI_ENDPOINT}/openai/deployments/{AZURE_OPENAI_DEPLOYMENT}/embeddings?api-version=2024-02-01"
+    url = (
+        f"{AZURE_OPENAI_ENDPOINT}/openai/deployments/{AZURE_OPENAI_DEPLOYMENT}"
+        f"/embeddings?api-version=2024-02-01"
+    )
     headers = {"api-key": AZURE_OPENAI_KEY, "Content-Type": "application/json"}
     payload = {"input": texts, "model": "text-embedding-3-small"}
     try:
@@ -287,7 +320,11 @@ def get_embeddings(texts: list) -> list:
     except Exception as e:
         raise RuntimeError(f"Embedding failed: {str(e)}")
 
-def index_segments_direct(video_id: str, segments: list, source_url: str = None, source_type: str = None) -> Dict[str, Any]:
+
+def index_segments_direct(
+    video_id: str, segments: list,
+    source_url: str = None, source_type: str = None
+) -> Dict[str, Any]:
     if not SEARCH_ENDPOINT or not SEARCH_KEY:
         raise RuntimeError("Azure Search not configured")
     schema_info = get_index_schema()
@@ -329,7 +366,10 @@ def index_segments_direct(video_id: str, segments: list, source_url: str = None,
         for field_name, value in field_mappings.items():
             if field_name in available_fields:
                 doc[field_name] = value
-        embedding_field = next((f for f in ["embedding", "embeddings", "vector", "vectors"] if f in available_fields), None)
+        embedding_field = next(
+            (f for f in ["embedding", "embeddings", "vector", "vectors"] if f in available_fields),
+            None
+        )
         if embedding and embedding_field:
             try:
                 doc[embedding_field] = [float(x) for x in embedding]
@@ -354,6 +394,7 @@ def index_segments_direct(video_id: str, segments: list, source_url: str = None,
     except Exception as e:
         raise RuntimeError(f"Indexing failed: {str(e)}")
 
+
 def process_transcription_to_segments(transcription_data: Dict, video_id: str) -> list:
     segments = []
     for i, phrase in enumerate(transcription_data.get("recognizedPhrases", [])):
@@ -375,36 +416,74 @@ def process_transcription_to_segments(transcription_data: Dict, video_id: str) -
 # VIDEO RETRIEVAL AND DELETION
 # =============================================================================
 
-def get_stored_videos(video_id: str = None, source_type: str = None, 
-                     include_missing: bool = True, limit: int = 1000) -> List[Dict]:
+def get_source_url_for_video(video_id: str) -> Optional[str]:
+    """Direct lookup of source_url for a single video_id."""
+    if not SEARCH_ENDPOINT or not SEARCH_KEY or not SEARCH_INDEX_NAME:
+        return None
+    if not video_id or not isinstance(video_id, str):
+        return None
+    search_url = (
+        f"{SEARCH_ENDPOINT}/indexes/{SEARCH_INDEX_NAME}"
+        f"/docs/search?api-version=2024-07-01"
+    )
+    headers = {"api-key": SEARCH_KEY, "Content-Type": "application/json"}
+    escaped_id = video_id.replace("'", "''")
+    payload = {
+        "search": "*",
+        "filter": f"video_id eq '{escaped_id}'",
+        "select": "video_id,source_url,source_type",
+        "top": 1
+    }
+    try:
+        r = requests.post(search_url, headers=headers, json=payload, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        docs = data.get("value", [])
+        if docs:
+            source_url = docs[0].get("source_url")
+            if source_url and isinstance(source_url, str):
+                source_url = source_url.strip()
+                if source_url:
+                    return source_url
+    except Exception as e:
+        print(f"Error looking up source_url for {video_id}: {e}")
+    return None
+
+
+def get_stored_videos(
+    video_id: str = None, source_type: str = None,
+    include_missing: bool = True, limit: int = 1000
+) -> List[Dict]:
+    """Retrieve stored videos with their source URLs."""
     if not SEARCH_ENDPOINT or not SEARCH_KEY:
         return []
-    url = f"{SEARCH_ENDPOINT}/indexes/{SEARCH_INDEX_NAME}/docs/search?api-version=2024-07-01"
+    url = (
+        f"{SEARCH_ENDPOINT}/indexes/{SEARCH_INDEX_NAME}"
+        f"/docs/search?api-version=2024-07-01"
+    )
     headers = {"api-key": SEARCH_KEY, "Content-Type": "application/json"}
     try:
         schema = get_index_schema()
         available_fields = {f['name'] for f in schema.get('fields', [])}
-    except:
+    except Exception:
         available_fields = set()
     filters = []
-    if video_id:
+    if video_id and isinstance(video_id, str) and video_id.strip():
         escaped_id = video_id.replace("'", "''")
         filters.append(f"video_id eq '{escaped_id}'")
-    if source_type and source_type != "All":
+    if source_type and isinstance(source_type, str) and source_type != "All":
         escaped_type = source_type.replace("'", "''")
         filters.append(f"source_type eq '{escaped_type}'")
     filter_query = " and ".join(filters) if filters else None
     select_fields = ["video_id"]
-    optional_fields = ["source_url", "source_type", "processed_at"]
-    for field in optional_fields:
-        if not available_fields or field in available_fields:
+    for field in ["source_url", "source_type", "processed_at"]:
+        if field in available_fields:
             select_fields.append(field)
     all_videos = {}
     skip = 0
     batch_size = 1000
-    max_iterations = 100
     try:
-        for iteration in range(max_iterations):
+        while True:
             payload = {
                 "search": "*",
                 "select": ",".join(select_fields),
@@ -420,37 +499,56 @@ def get_stored_videos(video_id: str = None, source_type: str = None,
             r.raise_for_status()
             data = r.json()
             docs = data.get("value", [])
-            total_count = data.get("@odata.count", 0)
             if not docs:
                 break
             for doc in docs:
                 vid = doc.get('video_id')
                 if vid and vid not in all_videos:
+                    source_url = doc.get('source_url')
+                    if source_url and isinstance(source_url, str):
+                        source_url = source_url.strip()
+                    else:
+                        source_url = ''
                     all_videos[vid] = {
                         'video_id': vid,
                         'source_type': doc.get('source_type') or 'unknown',
-                        'source_url': doc.get('source_url', ''),
+                        'source_url': source_url,
                         'processed_at': doc.get('processed_at', 'unknown')
                     }
             skip += len(docs)
-            if skip >= total_count or len(docs) < batch_size:
+            if len(docs) < batch_size:
                 break
-        videos = list(all_videos.values())[:limit]
-        return videos
+        return list(all_videos.values())[:limit]
     except Exception as e:
         st.error(f"Failed to retrieve videos: {e}")
         return []
 
+
 def delete_video_by_id(video_id: str) -> bool:
     if not SEARCH_ENDPOINT or not SEARCH_KEY:
         return False
-    search_url = f"{SEARCH_ENDPOINT}/indexes/{SEARCH_INDEX_NAME}/docs/search?api-version=2024-07-01"
-    headers = {"api-key": SEARCH_KEY, "Content-Type": "application/json"}
+    if not video_id or not isinstance(video_id, str):
+        return False
+
+    # Get the key field name first so we can include it in the select
+    try:
+        schema    = get_index_schema()
+        key_field = schema.get('key_field', 'id')
+    except Exception:
+        key_field = 'id'
+
+    search_url = (
+        f"{SEARCH_ENDPOINT}/indexes/{SEARCH_INDEX_NAME}"
+        f"/docs/search?api-version=2024-07-01"
+    )
+    headers    = {"api-key": SEARCH_KEY, "Content-Type": "application/json"}
     escaped_id = video_id.replace("'", "''")
+
+    # CRITICAL: include the key field in select so we can build delete actions
     payload = {
         "search": "*",
         "filter": f"video_id eq '{escaped_id}'",
-        "select": "video_id",
+        "select": f"{key_field},video_id",
         "top": 1000
     }
     try:
@@ -459,20 +557,23 @@ def delete_video_by_id(video_id: str) -> bool:
         docs = r.json().get("value", [])
         if not docs:
             return False
-        schema = get_index_schema()
-        key_field = schema.get('key_field', 'id')
+
         delete_docs = []
         for doc in docs:
             doc_key = doc.get(key_field) or doc.get('id')
             if doc_key:
-                delete_docs.append({
-                    "@search.action": "delete",
-                    key_field: doc_key
-                })
+                delete_docs.append({"@search.action": "delete", key_field: doc_key})
+
         if not delete_docs:
             return False
-        delete_url = f"{SEARCH_ENDPOINT}/indexes/{SEARCH_INDEX_NAME}/docs/index?api-version=2024-07-01"
-        r = requests.post(delete_url, headers=headers, json={"value": delete_docs}, timeout=60)
+
+        delete_url = (
+            f"{SEARCH_ENDPOINT}/indexes/{SEARCH_INDEX_NAME}"
+            f"/docs/index?api-version=2024-07-01"
+        )
+        r = requests.post(
+            delete_url, headers=headers, json={"value": delete_docs}, timeout=60
+        )
         r.raise_for_status()
         return True
     except Exception as e:
@@ -490,12 +591,14 @@ def generate_video_id(filename: str) -> str:
     hash_suffix = hashlib.md5(clean_name.encode()).hexdigest()[:8]
     return f"vid_{clean_name[:50]}_{hash_suffix}"
 
+
 def test_sas_url(sas_url: str) -> Tuple[bool, str]:
     try:
         r = requests.head(sas_url, timeout=10, allow_redirects=True)
         return (r.status_code == 200, f"HTTP {r.status_code}")
     except Exception as e:
         return (False, str(e))
+
 
 def generate_sas_token_fixed(blob_name: str, expiry_hours: int = 24) -> Optional[str]:
     if not AZURE_STORAGE_KEY:
@@ -504,30 +607,39 @@ def generate_sas_token_fixed(blob_name: str, expiry_hours: int = 24) -> Optional
         expiry = datetime.now(timezone.utc) + timedelta(hours=expiry_hours)
         expiry_str = expiry.strftime('%Y-%m-%dT%H:%M:%SZ')
         account_key = base64.b64decode(AZURE_STORAGE_KEY)
-        canonicalized_resource = f"/blob/{AZURE_STORAGE_ACCOUNT}/{INPUT_CONTAINER}/{blob_name}"
-        string_to_sign = (
-            f"r\n\n{expiry_str}\n{canonicalized_resource}\n\n\nhttps\n2020-12-06\nb\n\n\n\n\n\n\n"
+        canonicalized_resource = (
+            f"/blob/{AZURE_STORAGE_ACCOUNT}/{INPUT_CONTAINER}/{blob_name}"
         )
-        signed_hmac = hmac.new(account_key, string_to_sign.encode('utf-8'), hashlib.sha256).digest()
+        string_to_sign = (
+            f"r\n\n{expiry_str}\n{canonicalized_resource}\n\n\n"
+            f"https\n2020-12-06\nb\n\n\n\n\n\n\n"
+        )
+        signed_hmac = hmac.new(
+            account_key, string_to_sign.encode('utf-8'), hashlib.sha256
+        ).digest()
         signature = base64.b64encode(signed_hmac).decode('utf-8')
         sas_params = {
-            'sv': '2020-12-06',
-            'sr': 'b',
-            'sp': 'r',
-            'se': expiry_str,
-            'spr': 'https',
-            'sig': signature
+            'sv': '2020-12-06', 'sr': 'b', 'sp': 'r',
+            'se': expiry_str, 'spr': 'https', 'sig': signature
         }
-        return '&'.join([f"{k}={urllib.parse.quote(v, safe='')}" for k, v in sas_params.items()])
+        return '&'.join(
+            [f"{k}={urllib.parse.quote(v, safe='')}" for k, v in sas_params.items()]
+        )
     except Exception as e:
         st.error(f"SAS generation error: {e}")
         return None
 
-def upload_to_azure_blob_fixed(file_bytes: bytes, blob_name: str) -> Tuple[Optional[str], Optional[str]]:
+
+def upload_to_azure_blob_fixed(
+    file_bytes: bytes, blob_name: str
+) -> Tuple[Optional[str], Optional[str]]:
     if not AZURE_STORAGE_KEY:
         return None, "Azure Storage key not configured"
     try:
-        url = f"https://{AZURE_STORAGE_ACCOUNT}.blob.core.windows.net/{INPUT_CONTAINER}/{blob_name}"
+        url = (
+            f"https://{AZURE_STORAGE_ACCOUNT}.blob.core.windows.net"
+            f"/{INPUT_CONTAINER}/{blob_name}"
+        )
         date_str = datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
         content_length = len(file_bytes)
         string_to_sign = (
@@ -536,7 +648,9 @@ def upload_to_azure_blob_fixed(file_bytes: bytes, blob_name: str) -> Tuple[Optio
             f"/{AZURE_STORAGE_ACCOUNT}/{INPUT_CONTAINER}/{blob_name}"
         )
         account_key = base64.b64decode(AZURE_STORAGE_KEY)
-        signed_hmac = hmac.new(account_key, string_to_sign.encode('utf-8'), hashlib.sha256).digest()
+        signed_hmac = hmac.new(
+            account_key, string_to_sign.encode('utf-8'), hashlib.sha256
+        ).digest()
         signature = base64.b64encode(signed_hmac).decode('utf-8')
         headers = {
             "x-ms-date": date_str,
@@ -560,9 +674,14 @@ def upload_to_azure_blob_fixed(file_bytes: bytes, blob_name: str) -> Tuple[Optio
     except Exception as e:
         return None, f"Upload error: {str(e)}"
 
-def upload_to_azure_blob_sdk(file_bytes: bytes, blob_name: str) -> Tuple[Optional[str], Optional[str]]:
+
+def upload_to_azure_blob_sdk(
+    file_bytes: bytes, blob_name: str
+) -> Tuple[Optional[str], Optional[str]]:
     try:
-        from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
+        from azure.storage.blob import (
+            BlobServiceClient, generate_blob_sas, BlobSasPermissions
+        )
         connection_string = (
             f"DefaultEndpointsProtocol=https;"
             f"AccountName={AZURE_STORAGE_ACCOUNT};"
@@ -586,7 +705,10 @@ def upload_to_azure_blob_sdk(file_bytes: bytes, blob_name: str) -> Tuple[Optiona
             expiry=datetime.now(timezone.utc) + timedelta(hours=24),
             protocol="https"
         )
-        sas_url = f"https://{AZURE_STORAGE_ACCOUNT}.blob.core.windows.net/{INPUT_CONTAINER}/{blob_name}?{sas_token}"
+        sas_url = (
+            f"https://{AZURE_STORAGE_ACCOUNT}.blob.core.windows.net"
+            f"/{INPUT_CONTAINER}/{blob_name}?{sas_token}"
+        )
         is_valid, test_msg = test_sas_url(sas_url)
         if not is_valid:
             return None, f"SAS URL validation failed: {test_msg}"
@@ -596,11 +718,15 @@ def upload_to_azure_blob_sdk(file_bytes: bytes, blob_name: str) -> Tuple[Optiona
     except Exception as e:
         return None, f"SDK upload failed: {str(e)}"
 
+
 def save_segments_to_blob(video_id: str, segments: list) -> str:
     if not AZURE_STORAGE_KEY:
         raise RuntimeError("Azure Storage key not configured")
     blob_name = f"{video_id}_segments.json"
-    url = f"https://{AZURE_STORAGE_ACCOUNT}.blob.core.windows.net/{SEGMENTS_CONTAINER}/{blob_name}"
+    url = (
+        f"https://{AZURE_STORAGE_ACCOUNT}.blob.core.windows.net"
+        f"/{SEGMENTS_CONTAINER}/{blob_name}"
+    )
     json_bytes = json.dumps(segments, indent=2).encode('utf-8')
     content_length = len(json_bytes)
     date_str = datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
@@ -610,7 +736,9 @@ def save_segments_to_blob(video_id: str, segments: list) -> str:
         f"/{AZURE_STORAGE_ACCOUNT}/{SEGMENTS_CONTAINER}/{blob_name}"
     )
     account_key = base64.b64decode(AZURE_STORAGE_KEY)
-    signed_hmac = hmac.new(account_key, string_to_sign.encode('utf-8'), hashlib.sha256).digest()
+    signed_hmac = hmac.new(
+        account_key, string_to_sign.encode('utf-8'), hashlib.sha256
+    ).digest()
     signature = base64.b64encode(signed_hmac).decode('utf-8')
     headers = {
         "x-ms-date": date_str,
@@ -624,8 +752,14 @@ def save_segments_to_blob(video_id: str, segments: list) -> str:
     r.raise_for_status()
     return blob_name
 
-def download_youtube_audio(youtube_url: str, output_path: str, 
-                          progress_callback=None) -> Tuple[Optional[str], Optional[str]]:
+# =============================================================================
+# DOWNLOAD FUNCTIONS
+# =============================================================================
+
+def download_youtube_audio(
+    youtube_url: str, output_path: str,
+    progress_callback=None
+) -> Tuple[Optional[str], Optional[str]]:
     if not check_yt_dlp():
         return None, "yt-dlp not installed"
     if not youtube_url or not youtube_url.strip():
@@ -646,7 +780,7 @@ def download_youtube_audio(youtube_url: str, output_path: str,
             node_check = subprocess.run(["which", "node"], capture_output=True, text=True)
             if node_check.returncode != 0:
                 cmd.extend(["--extractor-args", "youtube:player_client=web"])
-        except:
+        except Exception:
             pass
         if progress_callback:
             progress_callback(15, "Downloading from YouTube...")
@@ -669,14 +803,163 @@ def download_youtube_audio(youtube_url: str, output_path: str,
     except Exception as e:
         return None, f"Error: {str(e)}"
 
+
+def download_box_audio(
+    box_url: str, output_path: str,
+    progress_callback=None
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Download audio from a Box shared file URL.
+
+    Tries multiple URL patterns in order for /file/{id}?s={token} viewer links,
+    since Box's direct download endpoint varies by account/sharing configuration:
+      1. /file/{id}/content?s={token}         — simplest shared-link download
+      2. index.php?rm=box_download_shared_file — legacy download endpoint
+      3. /shared/static/{hash}                — already a direct download link
+      4. URL as-is                            — last resort
+
+    If all candidates return HTML (i.e. Box is requiring login), returns a clear
+    error message with instructions to use the Download button URL instead.
+    """
+    from urllib.parse import urlparse, parse_qs
+
+    if not box_url or not box_url.strip():
+        return None, "Box URL is empty"
+
+    try:
+        parsed = urlparse(box_url.strip())
+        qs = parse_qs(parsed.query)
+        url_lower = box_url.lower()
+        base = f"{parsed.scheme}://{parsed.netloc}"
+
+        file_id_match = re.search(r'/file/(\d+)', parsed.path)
+        shared_token = qs.get('s', [None])[0]
+
+        # Build ordered list of candidate download URLs to try
+        candidates = []
+
+        if file_id_match and shared_token:
+            file_id = file_id_match.group(1)
+            # Pattern 1: /file/{id}/content?s={token} — cleanest shared-link download
+            candidates.append(
+                f"{base}/file/{file_id}/content?s={shared_token}"
+            )
+            # Pattern 2: index.php legacy download endpoint
+            candidates.append(
+                f"{base}/index.php"
+                f"?rm=box_download_shared_file"
+                f"&file_id=f_{file_id}"
+                f"&shared_name={shared_token}"
+            )
+        elif "/shared/static/" in url_lower:
+            # Already a direct static download link
+            candidates.append(box_url.strip())
+        else:
+            # Unknown Box URL format — try as-is
+            candidates.append(box_url.strip())
+
+        if progress_callback:
+            progress_callback(15, "Downloading from Box...")
+
+        req_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+        }
+
+        last_error = "All download attempts failed"
+
+        for attempt_url in candidates:
+            try:
+                with requests.get(
+                    attempt_url, headers=req_headers,
+                    stream=True, timeout=300, allow_redirects=True
+                ) as r:
+                    r.raise_for_status()
+
+                    content_type = r.headers.get("Content-Type", "")
+
+                    # HTML response means Box is showing a login/preview page
+                    if "text/html" in content_type:
+                        last_error = (
+                            f"URL returned HTML (not audio): {attempt_url}"
+                        )
+                        continue  # try next candidate
+
+                    # Determine file extension
+                    ext = ".m4a"
+                    ct_lower = content_type.lower()
+                    if "mp3" in ct_lower or "mpeg" in ct_lower:
+                        ext = ".mp3"
+                    elif "wav" in ct_lower:
+                        ext = ".wav"
+                    elif "mp4" in ct_lower:
+                        ext = ".mp4"
+                    elif "ogg" in ct_lower:
+                        ext = ".ogg"
+
+                    # Content-Disposition filename takes priority
+                    disposition = r.headers.get("Content-Disposition", "")
+                    cd_match = re.search(r'filename=["\']?([^"\';\s]+)', disposition)
+                    if cd_match:
+                        cd_name = cd_match.group(1)
+                        for candidate_ext in [".m4a", ".mp3", ".wav", ".mp4", ".webm", ".ogg"]:
+                            if cd_name.lower().endswith(candidate_ext):
+                                ext = candidate_ext
+                                break
+
+                    # URL path extension overrides Content-Type
+                    url_path = attempt_url.split("?")[0]
+                    for candidate_ext in [".m4a", ".mp3", ".wav", ".mp4", ".webm", ".ogg"]:
+                        if url_path.lower().endswith(candidate_ext):
+                            ext = candidate_ext
+                            break
+
+                    final_path = (
+                        output_path if output_path.lower().endswith(ext)
+                        else output_path.rsplit(".", 1)[0] + ext
+                    )
+
+                    with open(final_path, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+
+                    if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+                        return final_path, None
+
+                    last_error = "Downloaded file is empty or missing"
+
+            except Exception as e:
+                last_error = str(e)
+                continue
+
+        # All candidates failed — give the user clear instructions
+        return None, (
+            f"Could not download the Box file automatically ({last_error}).\n\n"
+            "To get a direct download URL:\n"
+            "1. Open the Box link in your browser\n"
+            "2. Click the Download button (↓ icon in the top toolbar)\n"
+            "3. The resulting URL will look like:\n"
+            "   https://tulane.app.box.com/shared/static/<hash>.m4a\n"
+            "4. Paste that URL into the Media URL field instead."
+        )
+
+    except Exception as e:
+        return None, f"Box download error: {str(e)}"
+
 # =============================================================================
 # MAIN VIDEO PROCESSING
 # =============================================================================
 
-def process_single_video(url: str, custom_id: Optional[str] = None,
-                        source_type: str = "unknown",
-                        progress_bar=None, status_text=None,
-                        overall_progress: Tuple[int, int] = (0, 1)) -> Dict[str, Any]:
+def process_single_video(
+    url: str, custom_id: Optional[str] = None,
+    source_type: str = "unknown",
+    progress_bar=None, status_text=None,
+    overall_progress: Tuple[int, int] = (0, 1)
+) -> Dict[str, Any]:
     result = {
         "url": url,
         "video_id": None,
@@ -694,13 +977,17 @@ def process_single_video(url: str, custom_id: Optional[str] = None,
             result["status"] = "failed"
             result["error"] = "Unknown URL type"
             return result
+
         video_id = custom_id.strip() if custom_id else generate_video_id(f"batch_{url}")
         result["video_id"] = video_id
         current, total = overall_progress
         base_progress = int((current / total) * 100) if progress_bar else 0
+
         if status_text:
             status_text.text(f"[{current}/{total}] Processing: {video_id}")
+
         media_url = None
+
         if url_type == "youtube":
             if not check_yt_dlp():
                 result["status"] = "failed"
@@ -729,14 +1016,44 @@ def process_single_video(url: str, custom_id: Optional[str] = None,
                     result["error"] = f"Upload failed: {error}"
                     return result
                 media_url = sas_url
+
+        elif url_type == "box":
+            # Download Box file first, then upload to Azure Blob
+            import tempfile
+            with tempfile.TemporaryDirectory() as tmpdir:
+                if status_text:
+                    status_text.text(f"[{current}/{total}] Downloading from Box...")
+                output_path = f"{tmpdir}/box_{video_id}.m4a"
+                downloaded_path, error = download_box_audio(url.strip(), output_path)
+                if error:
+                    result["status"] = "failed"
+                    result["error"] = f"Box download failed: {error}"
+                    return result
+                with open(downloaded_path, 'rb') as f:
+                    file_bytes = f.read()
+                blob_name = f"batch_box_{video_id}_{int(time.time())}.m4a"
+                if status_text:
+                    status_text.text(f"[{current}/{total}] Uploading to Azure...")
+                sas_url, error = upload_to_azure_blob_sdk(file_bytes, blob_name)
+                if error and ("not installed" in error or "SDK" in error):
+                    sas_url, error = upload_to_azure_blob_fixed(file_bytes, blob_name)
+                if error:
+                    result["status"] = "failed"
+                    result["error"] = f"Upload failed: {error}"
+                    return result
+                media_url = sas_url
+                # source_url stays as the original Box URL (set at top of result dict)
+
         elif url_type == "direct":
             media_url = url.strip()
             if status_text:
                 status_text.text(f"[{current}/{total}] Using direct URL...")
+
         if not media_url:
             result["status"] = "failed"
             result["error"] = "No media URL available"
             return result
+
         if status_text:
             status_text.text(f"[{current}/{total}] Submitting to Speech API...")
         submit_result = submit_transcription_direct(video_id, media_url)
@@ -745,6 +1062,7 @@ def process_single_video(url: str, custom_id: Optional[str] = None,
             result["status"] = "failed"
             result["error"] = "No operation URL returned"
             return result
+
         max_polls = 120
         transcription_data = None
         for i in range(max_polls):
@@ -753,30 +1071,42 @@ def process_single_video(url: str, custom_id: Optional[str] = None,
             status = poll_result.get("status", "unknown")
             if progress_bar:
                 poll_progress = min(int((i / max_polls) * 20), 20)
-                overall = base_progress + int((1 / total) * 80) + int((1 / total) * poll_progress)
+                overall = (
+                    base_progress
+                    + int((1 / total) * 80)
+                    + int((1 / total) * poll_progress)
+                )
                 progress_bar.progress(min(overall, 99))
             if status.lower() == "succeeded":
                 transcription_data = get_transcription_from_result(poll_result)
                 break
             elif status.lower() == "failed":
-                error_msg = poll_result.get("properties", {}).get("error", {}).get("message", "Unknown error")
+                error_msg = (
+                    poll_result.get("properties", {})
+                    .get("error", {})
+                    .get("message", "Unknown error")
+                )
                 result["status"] = "failed"
                 result["error"] = f"Transcription failed: {error_msg}"
                 return result
+
         if not transcription_data:
             result["status"] = "failed"
             result["error"] = "Transcription timed out"
             return result
+
         if status_text:
             status_text.text(f"[{current}/{total}] Processing segments...")
         segments = process_transcription_to_segments(transcription_data, video_id)
         result["segments_count"] = len(segments)
         save_segments_to_blob(video_id, segments)
+
         try:
+            # Always store the original user-facing URL, not the SAS blob URL
             index_result = index_segments_direct(
                 video_id,
                 segments,
-                source_url=url,
+                source_url=url,          # original URL preserved throughout
                 source_type=source_type
             )
             result["url_stored"] = index_result.get('source_url_stored', False)
@@ -788,10 +1118,186 @@ def process_single_video(url: str, custom_id: Optional[str] = None,
             }
         except Exception as e:
             result["index_status"] = f"Indexing failed: {str(e)}"
+
         result["status"] = "success"
+
     except Exception as e:
         result["status"] = "failed"
         result["error"] = str(e)
         import traceback
         result["error"] += f"\n{traceback.format_exc()}"
+
     return result
+
+# =============================================================================
+# VIDEO LINK GENERATION
+# =============================================================================
+
+def get_box_audio_url(box_url: str) -> Tuple[Optional[str], bool]:
+    """
+    Convert a Box viewer URL to a direct audio URL suitable for fetching bytes.
+
+    Returns:
+        (audio_url, is_embeddable)
+
+    Uses the index.php download endpoint which is known to work for shared files.
+    Falls back to /content and /shared/static patterns.
+    """
+    from urllib.parse import urlparse, parse_qs
+
+    if not box_url or "box.com" not in box_url.lower():
+        return None, False
+
+    try:
+        parsed = urlparse(box_url.strip())
+        qs     = parse_qs(parsed.query)
+        base   = f"{parsed.scheme}://{parsed.netloc}"
+
+        file_id_match = re.search(r'/file/(\d+)', parsed.path)
+        shared_token  = qs.get('s', [None])[0]
+
+        if file_id_match and shared_token:
+            file_id = file_id_match.group(1)
+            # Use index.php — the same endpoint that download_box_audio uses
+            # and that we know works for shared files
+            url = (
+                f"{base}/index.php"
+                f"?rm=box_download_shared_file"
+                f"&file_id=f_{file_id}"
+                f"&shared_name={shared_token}"
+            )
+            return url, True
+
+        if '/shared/static/' in box_url.lower():
+            return box_url.strip(), True
+
+    except Exception:
+        pass
+
+    return None, False
+
+
+def fetch_box_audio_bytes(box_url: str) -> Optional[bytes]:
+    """
+    Fetch audio bytes from a Box shared file URL for embedding in st.audio().
+    Tries multiple endpoints in order, same strategy as download_box_audio.
+    Returns None if all attempts fail or return HTML.
+    """
+    from urllib.parse import urlparse, parse_qs
+
+    if not box_url:
+        return None
+
+    try:
+        parsed = urlparse(box_url.strip())
+        qs     = parse_qs(parsed.query)
+        base   = f"{parsed.scheme}://{parsed.netloc}"
+
+        file_id_match = re.search(r'/file/(\d+)', parsed.path)
+        shared_token  = qs.get('s', [None])[0]
+
+        candidates = []
+        if file_id_match and shared_token:
+            file_id = file_id_match.group(1)
+            candidates.append(
+                f"{base}/index.php"
+                f"?rm=box_download_shared_file"
+                f"&file_id=f_{file_id}"
+                f"&shared_name={shared_token}"
+            )
+            candidates.append(
+                f"{base}/file/{file_id}/content?s={shared_token}"
+            )
+        elif '/shared/static/' in box_url.lower():
+            candidates.append(box_url.strip())
+        else:
+            candidates.append(box_url.strip())
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+        }
+
+        for url in candidates:
+            try:
+                resp = requests.get(
+                    url, headers=headers,
+                    timeout=60, allow_redirects=True
+                )
+                ct = resp.headers.get("Content-Type", "")
+                if resp.status_code == 200 and "text/html" not in ct:
+                    return resp.content
+            except Exception:
+                continue
+
+    except Exception:
+        pass
+
+    return None
+
+
+def build_video_link(
+    video_id: str, start_ms: int,
+    source_url: Optional[str] = None,
+    source_type: Optional[str] = None
+) -> Tuple[str, str, bool]:
+    """
+    Build a playable video link with time marker where supported.
+
+    Returns:
+        Tuple of (url, link_type_description, supports_time_marker)
+    """
+    start_sec = ms_to_seconds(start_ms)
+
+    # Resolve source URL: use passed value, or look up from index
+    actual_source = None
+    if source_url and isinstance(source_url, str):
+        actual_source = source_url.strip() or None
+    if not actual_source and video_id and isinstance(video_id, str):
+        try:
+            actual_source = get_source_url_for_video(video_id)
+        except Exception:
+            actual_source = None
+
+    if not actual_source:
+        return ("#", "No source URL stored", False)
+
+    source_lower = actual_source.lower()
+
+    # YouTube — append time parameter
+    if "youtube.com" in source_lower or "youtu.be" in source_lower:
+        base = re.sub(r'[?&](t|start)=\d+s?', '', actual_source)
+        sep = "&" if "?" in base else "?"
+        return (f"{base}{sep}t={start_sec}s", "YouTube", True)
+
+    # Box
+    if "box.com" in source_lower or "boxcloud.com" in source_lower:
+        # /file/{id}?s={token} — Box viewer link, already correct for display
+        if "/file/" in source_lower:
+            return (actual_source, "Box", False)
+        # /s/{code} — Box shared folder/file link
+        if "/s/" in source_lower:
+            return (actual_source, "Box", False)
+        # /shared/static/{hash} — direct download, no viewer equivalent
+        if "/shared/static/" in source_lower:
+            return (actual_source, "Box (download)", False)
+        return (actual_source, "Box", False)
+
+    # Vimeo — append fragment time marker
+    if "vimeo.com" in source_lower:
+        base = actual_source.split("#")[0].split("?")[0]
+        return (f"{base}#t={start_sec}s", "Vimeo", True)
+
+    # Internal SAS / blob storage URLs — not suitable as user-facing links
+    if (
+        "blob.core.windows.net" in source_lower
+        or "sig=" in actual_source
+        or actual_source.startswith("uploaded_file://")
+    ):
+        return ("#", "Internal storage (no public link)", False)
+
+    # Generic direct URL
+    return (actual_source, "Direct", False)

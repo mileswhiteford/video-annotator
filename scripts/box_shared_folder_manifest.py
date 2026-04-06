@@ -1,5 +1,23 @@
 """
 scripts/box_shared_folder_manifest.py - Generate Video Manifest from Box
+
+This script enumerates .m4a video files from a Box shared folder and generates
+a manifest file (videos.jsonl) that lists all videos with their IDs and media URLs.
+It creates open shared links for each file so Azure Speech Service can access them.
+Architecture Role:
+- Pre-processing step before video ingestion
+- Generates videos.jsonl input file for import_videos.py
+- Handles Box API authentication and folder traversal
+- Creates publicly accessible download URLs for Speech Service
+Usage:
+  python scripts/box_shared_folder_manifest.py
+Output:
+  - videos.jsonl: One JSON object per line with video_id and media_url
+Configuration (via .env):
+  - BOX_SHARED_FOLDER_URL: Box shared folder link
+  - BOX_TOKEN or BOX_ACCESS_TOKEN/BOX_REFRESH_TOKEN: Box authentication
+  - OUT_PATH: Output file path (default: videos.jsonl)
+  - RECURSIVE: Whether to traverse subfolders (default: 1)
 """
 
 import json
@@ -167,6 +185,10 @@ def main():
                     continue
                 
                 video_id = f"vid_{file_id}"
+                
+                                # Make a per-file open shared link (Speech can fetch without auth).
+                # If your org disallows open links, this will fail — then you’ll need Blob staging.
+                
 
                 file_link = ensure_open_shared_link_for_file(token, file_id)
                 
