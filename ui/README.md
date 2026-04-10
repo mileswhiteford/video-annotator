@@ -23,9 +23,13 @@ Create `ui/.env` (do not commit):
 
 ```env
 SEARCH_FN_URL=https://<your-function-app>.azurewebsites.net/api/SearchSegments?code=...
-DEFAULT_MODE=hybrid
-DEFAULT_TOP=10
-DEFAULT_K=40
+MANAGE_LABELS_URL=https://<your-function-app>.azurewebsites.net/api/ManageLabels?code=...
+EVAL_LABELS_URL=https://<your-function-app>.azurewebsites.net/api/EvalLabels?code=...
+SEARCH_ENDPOINT=https://<your-search-service>.search.windows.net
+SEARCH_KEY=<your-search-query-key>
+AZURE_STORAGE_ACCOUNT=<your-storage-account>
+AZURE_STORAGE_KEY=<your-storage-key>
+SPEECH_KEY=<your-azure-speech-key>
 ```
 
 ### 3) Run Streamlit (IMPORTANT: use python -m)
@@ -78,17 +82,13 @@ az containerapp update \
   -g "$RG" -n "$APP" \
   --set-env-vars \
     SEARCH_FN_URL="https://<your-function-app>.azurewebsites.net/api/SearchSegments?code=..." \
-    DEFAULT_MODE="hybrid" \
-    DEFAULT_TOP="10" \
-    DEFAULT_K="40"
-```
-
-### Adding env var for label management
-
-```bash
-az containerapp secret set -g "$RG" -n "$APP" --secrets manage-labels-url="https://video-annotator-function-ftdggpcvfyb0ehee.eastus-01.azurewebsites.net/api/ManageLabels?code=..."
-
-az containerapp update  -g "$RG" -n "$APP" --set-env-vars MANAGE_LABELS_URL=secretref:manage-labels-url
+    MANAGE_LABELS_URL="https://<your-function-app>.azurewebsites.net/api/ManageLabels?code=..." \
+    EVAL_LABELS_URL="https://<your-function-app>.azurewebsites.net/api/EvalLabels?code=..." \
+    SEARCH_ENDPOINT="https://<your-search-service>.search.windows.net" \
+    SEARCH_KEY="<your-search-query-key>" \
+    AZURE_STORAGE_ACCOUNT="<your-storage-account>" \
+    AZURE_STORAGE_KEY="<your-storage-key>" \
+    SPEECH_KEY="<your-azure-speech-key>"
 ```
 
 ### Scale to zero (optional)
