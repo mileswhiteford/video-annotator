@@ -44,7 +44,7 @@ def _build_filter(
     labels: Optional[List[str]] = None,
     label_match: str = "any",
 ) -> Optional[str]:
-    clauses = []
+    clauses = ["video_id ne null"]
     if video_id:
         clauses.append(f"video_id eq '{_escape_odata_string(video_id)}'")
     if start_ms is not None:

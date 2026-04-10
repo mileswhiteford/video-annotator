@@ -296,7 +296,7 @@ def render_search_page() -> None:
         st.error(f"Search failed: {e}")
         st.stop()
 
-    hits = data.get("hits", [])
+    hits = [h for h in data.get("hits", []) if h.get("video_id") and h.get("text")]
     st.caption(f"Count: {data.get('count')} | Returned: {len(hits)}")
 
     if not hits:
