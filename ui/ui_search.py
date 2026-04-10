@@ -18,9 +18,13 @@ Deployment:
   - Azure: Deployed as Container App (see ui/README.md)
 Configuration (via .env or Container App env vars):
   - SEARCH_FN_URL: SearchSegments function endpoint
-  - DEFAULT_MODE: Default search mode (hybrid/keyword/vector)
-  - DEFAULT_TOP: Default number of results
-  - DEFAULT_K: Default vector recall depth
+  - MANAGE_LABELS_URL: ManageLabels function endpoint
+  - EVAL_LABELS_URL: EvalLabels function endpoint
+  - SEARCH_ENDPOINT: Azure AI Search endpoint
+  - SEARCH_KEY: Azure AI Search query key
+  - AZURE_STORAGE_ACCOUNT: Azure Storage account name
+  - AZURE_STORAGE_KEY: Azure Storage account key
+  - SPEECH_KEY: Azure Speech service key
 """
 
 import os
@@ -56,6 +60,11 @@ defaults = {
     'metadata_loaded': False,
     'pending_delete': None,
     'delete_error': None,
+    'search_hits': [],
+    'search_count': None,
+    'search_page': 0,
+    'search_params': None,
+    'search_loading': False,
 }
 for key, value in defaults.items():
     if key not in st.session_state:
@@ -253,7 +262,6 @@ def render_search_page() -> None:
     with st.sidebar:
         st.header("Settings")
         mode = st.selectbox("Mode", ["keyword", "hybrid", "vector"], index=1)
-        top  = st.slider("Top", 1, 50, 10)
         k    = st.slider("Vector k (hybrid/vector)", 5, 200, 40)
         video_id_filter = st.text_input("Filter by video_id (optional)", value="")
         label_names = get_label_names()
@@ -274,41 +282,63 @@ def render_search_page() -> None:
         st.caption("Tip: keep k ~ 4×top for hybrid.")
 
     # ── Search bar ────────────────────────────────────────────────────────
+    PAGE_SIZE = 10
+
     q  = st.text_input("Query", value="", placeholder="e.g., measles misinformation")
     go = st.button("Search", type="primary", disabled=(not q.strip() and not selected_labels))
 
-    if not go:
+    if go:
+        params = {"q": q.strip(), "mode": mode, "top": PAGE_SIZE}
+        if mode in ("hybrid", "vector"):
+            params["k"] = k
+        if video_id_filter.strip():
+            params["video_id"] = video_id_filter.strip()
+        if selected_labels:
+            params["labels"] = selected_labels
+            params["label_match"] = label_match
+        st.session_state['search_params']  = params
+        st.session_state['search_page']   = 0
+        st.session_state['search_hits']   = []
+        st.session_state['search_count']  = None
+        st.session_state['search_loading'] = True
+
+    params = st.session_state.get('search_params')
+    if not params:
         return
 
-    payload = {"q": q.strip(), "mode": mode, "top": top}
-    if mode in ("hybrid", "vector"):
-        payload["k"] = k
-    if video_id_filter.strip():
-        payload["video_id"] = video_id_filter.strip()
-    if selected_labels:
-        payload["labels"] = selected_labels
-        payload["label_match"] = label_match
+    page = st.session_state['search_page']
 
-    try:
-        with st.spinner("Searching..."):
-            data = call_search_api(payload)
-    except Exception as e:
-        st.error(f"Search failed: {e}")
-        st.stop()
+    # ── Rerun 1: fetch and store, then trigger rerun 2 ────────────────────
+    if st.session_state['search_loading']:
+        with st.spinner("Loading..."):
+            payload = {**params, "skip": page * PAGE_SIZE}
+            try:
+                data = call_search_api(payload)
+            except Exception as e:
+                st.error(f"Search failed: {e}")
+                st.session_state['search_loading'] = False
+                st.stop()
+        st.session_state['search_hits']    = [h for h in data.get("hits", []) if h.get("video_id") and h.get("text")]
+        st.session_state['search_count']   = data.get("count") or 0
+        st.session_state['search_loading'] = False
+        st.rerun()
 
-    hits = [h for h in data.get("hits", []) if h.get("video_id") and h.get("text")]
-    st.caption(f"Count: {data.get('count')} | Returned: {len(hits)}")
+    # ── Rerun 2: render from session_state (no fetch) ─────────────────────
+    hits        = st.session_state['search_hits']
+    total_count = st.session_state['search_count'] or 0
+    total_pages = max(1, (total_count + PAGE_SIZE - 1) // PAGE_SIZE)
 
-    if not hits:
+    if not hits and page == 0:
         st.info("No results found.")
         return
 
-    # ── Render hits ───────────────────────────────────────────────────────
+    st.caption(f"Total: {total_count} | Page {page + 1} of {total_pages}")
+
     metadata_cache = st.session_state['video_metadata_cache']
     source_stats   = {"from_search": 0, "from_cache": 0, "missing": 0}
     type_counts    = {}
 
-    for i, h in enumerate(hits, start=1):
+    for i, h in enumerate(hits, start=page * PAGE_SIZE + 1):
         stats = render_hit(i, h, metadata_cache)
         origin = stats["source_origin"]
         if origin == "missing":
@@ -320,8 +350,25 @@ def render_search_page() -> None:
         lt = stats["link_type"]
         type_counts[lt] = type_counts.get(lt, 0) + 1
 
-    # ── Summary footer ────────────────────────────────────────────────────
+    # ── Pagination controls ───────────────────────────────────────────────
     st.divider()
+    nav_cols = st.columns([1, 2, 1])
+    with nav_cols[0]:
+        if page > 0:
+            if st.button("← Previous"):
+                st.session_state['search_page']    -= 1
+                st.session_state['search_loading']  = True
+                st.rerun()
+    with nav_cols[1]:
+        st.caption(f"Page {page + 1} of {total_pages}  ({total_count} results)")
+    with nav_cols[2]:
+        if page < total_pages - 1:
+            if st.button("Next →"):
+                st.session_state['search_page']    += 1
+                st.session_state['search_loading']  = True
+                st.rerun()
+
+    # ── Summary footer ────────────────────────────────────────────────────
     col1, col2, col3 = st.columns(3)
     with col1:
         st.caption(f"From search result: {source_stats['from_search']}")

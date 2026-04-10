@@ -97,7 +97,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         mode = (body.get("mode") or "keyword").lower()  # keyword | vector | hybrid
         top = int(body.get("top", 10))
-        top = max(1, min(top, 50))
+        top = max(1, min(top, 100))
+        skip = int(body.get("skip", 0))
+        skip = max(0, skip)
 
         # vector recall depth; hybrid often benefits from higher k than top
         k = int(body.get("k", max(20, top * 4)))
@@ -120,6 +122,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         payload: Dict[str, Any] = {
             "top": top,
+            "skip": skip,
             "count": True,
             "select": "segment_key,video_id,segment_id,start_ms,end_ms,text,pred_labels,pred_confidence,pred_rationale,guideline_version",
         }
