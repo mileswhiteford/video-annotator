@@ -30,6 +30,8 @@ SEARCH_KEY=<your-search-query-key>
 AZURE_STORAGE_ACCOUNT=<your-storage-account>
 AZURE_STORAGE_KEY=<your-storage-key>
 SPEECH_KEY=<your-azure-speech-key>
+AZURE_OPENAI_ENDPOINT=https://<your-resource>.openai.azure.com
+AZURE_OPENAI_KEY=<your-azure-openai-key>
 ```
 
 ### 3) Run Streamlit (IMPORTANT: use python -m)
@@ -88,7 +90,9 @@ az containerapp update \
     SEARCH_KEY="<your-search-query-key>" \
     AZURE_STORAGE_ACCOUNT="<your-storage-account>" \
     AZURE_STORAGE_KEY="<your-storage-key>" \
-    SPEECH_KEY="<your-azure-speech-key>"
+    SPEECH_KEY="<your-azure-speech-key>" \
+    AZURE_OPENAI_ENDPOINT="https://<your-resource>.openai.azure.com" \
+    AZURE_OPENAI_KEY="<your-azure-openai-key>"
 ```
 
 ### Scale to zero (optional)
