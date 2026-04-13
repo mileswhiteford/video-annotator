@@ -262,7 +262,6 @@ def render_search_page() -> None:
     with st.sidebar:
         st.header("Settings")
         mode = st.selectbox("Mode", ["keyword", "hybrid", "vector"], index=1)
-        k    = st.slider("Vector k (hybrid/vector)", 5, 200, 40)
         video_id_filter = st.text_input("Filter by video_id (optional)", value="")
         label_names = get_label_names()
         selected_labels = st.multiselect("Filter by labels (optional)", label_names)
@@ -290,7 +289,7 @@ def render_search_page() -> None:
     if go:
         params = {"q": q.strip(), "mode": mode, "top": PAGE_SIZE}
         if mode in ("hybrid", "vector"):
-            params["k"] = k
+            params["k"] = None  # set dynamically per page based on skip
         if video_id_filter.strip():
             params["video_id"] = video_id_filter.strip()
         if selected_labels:
@@ -311,7 +310,10 @@ def render_search_page() -> None:
     # ── Rerun 1: fetch and store, then trigger rerun 2 ────────────────────
     if st.session_state['search_loading']:
         with st.spinner("Loading..."):
-            payload = {**params, "skip": page * PAGE_SIZE}
+            skip = page * PAGE_SIZE
+            payload = {**params, "skip": skip}
+            if payload.get("k") is None:
+                payload["k"] = min(skip + PAGE_SIZE, 200)
             try:
                 data = call_search_api(payload)
             except Exception as e:
