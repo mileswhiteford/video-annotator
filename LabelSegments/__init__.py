@@ -189,6 +189,10 @@ def _process_batch(
         seg_id = s["segment_id"]
         segment_key = f"{video_id}_{seg_id}"
 
+        if segment_key not in existing_index:
+            logging.warning(f"Skipping {segment_key} — not found in search index, segment may not have been indexed")
+            continue
+
         existing = existing_index.get(segment_key, {"pred_labels": [], "pred_label_details": []})
         kept_labels = [n for n in existing["pred_labels"] if n not in strip_names]
         kept_details = [d for d in existing["pred_label_details"] if isinstance(d, dict) and d.get("name") not in strip_names]

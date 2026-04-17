@@ -37,14 +37,28 @@ def _escape_odata_string(value: str) -> str:
     return value.replace("'", "''")
 
 
-def _build_filter(video_id: Optional[str], start_ms: Optional[int], end_ms: Optional[int]) -> Optional[str]:
-    clauses = []
+def _build_filter(
+    video_id: Optional[str],
+    start_ms: Optional[int],
+    end_ms: Optional[int],
+    labels: Optional[List[str]] = None,
+    label_match: str = "any",
+) -> Optional[str]:
+    clauses = ["video_id ne null"]
     if video_id:
         clauses.append(f"video_id eq '{_escape_odata_string(video_id)}'")
     if start_ms is not None:
         clauses.append(f"start_ms ge {int(start_ms)}")
     if end_ms is not None:
         clauses.append(f"end_ms le {int(end_ms)}")
+    if labels:
+        escaped = [_escape_odata_string(l) for l in labels]
+        if label_match == "all":
+            for name in escaped:
+                clauses.append(f"pred_labels/any(l: l eq '{name}')")
+        else:  # "any"
+            joined = ",".join(escaped)
+            clauses.append(f"pred_labels/any(l: search.in(l, '{joined}'))")
     return " and ".join(clauses) if clauses else None
 
 
@@ -71,16 +85,21 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         body = req.get_json()
 
         q = (body.get("q") or body.get("search") or "").strip()
-        if not q:
+        labels = body.get("labels") or []
+        label_match = (body.get("label_match") or "any").lower()
+
+        if not q and not labels:
             return func.HttpResponse(
-                json.dumps({"error": "Provide non-empty 'q'."}),
+                json.dumps({"error": "Provide non-empty 'q' or at least one label filter."}),
                 mimetype="application/json",
                 status_code=400,
             )
 
         mode = (body.get("mode") or "keyword").lower()  # keyword | vector | hybrid
         top = int(body.get("top", 10))
-        top = max(1, min(top, 50))
+        top = max(1, min(top, 100))
+        skip = int(body.get("skip", 0))
+        skip = max(0, skip)
 
         # vector recall depth; hybrid often benefits from higher k than top
         k = int(body.get("k", max(20, top * 4)))
@@ -97,19 +116,28 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         url = f"{search_endpoint}/indexes/{index_name}/docs/search?api-version={api_version}"
 
+        # When no query text, force keyword mode with wildcard search
+        if not q:
+            mode = "keyword"
+
         payload: Dict[str, Any] = {
             "top": top,
+            "skip": skip,
             "count": True,
             "select": "segment_key,video_id,segment_id,start_ms,end_ms,text,pred_labels,pred_confidence,pred_rationale,guideline_version",
         }
 
-        odata_filter = _build_filter(video_id, start_ms, end_ms)
+        # Deterministic ordering when there's no relevance signal from a query
+        if not q:
+            payload["orderby"] = "video_id asc, start_ms asc"
+
+        odata_filter = _build_filter(video_id, start_ms, end_ms, labels, label_match)
         if odata_filter:
             payload["filter"] = odata_filter
 
         # keyword-only
         if mode == "keyword":
-            payload["search"] = q
+            payload["search"] = q if q else "*"
 
         # vector-only
         elif mode == "vector":
