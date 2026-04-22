@@ -1,5 +1,5 @@
 """
-upload_transcribe.py - Upload & Transcribe page for the Video Annotation Platform
+upload_transcribe.py - Upload & Transcribe page for VANTAGE-AI
 """
 
 import sys
@@ -33,7 +33,9 @@ from utils import (
     download_box_audio,
 )
 
-st.header("Upload Video for Transcription")
+APP_TITLE = "VANTAGE-AI: Video ANnotation, TAGging & Exploration"
+st.title(APP_TITLE)
+st.subheader("Upload Video for Transcription")
 
 # Check URL fields status
 url_status = check_url_fields_status()

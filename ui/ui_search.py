@@ -38,8 +38,9 @@ from utils import ms_to_ts, SEARCH_FN_URL, get_stored_videos, build_video_link, 
 
 load_dotenv()
 MANAGE_LABELS_URL = os.environ.get("MANAGE_LABELS_URL", "")
+APP_TITLE = "VANTAGE-AI: Video ANnotation, TAGging & Exploration"
 
-st.set_page_config(page_title="Video Segment Search", layout="wide")
+st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 # =============================================================================
 # SESSION STATE INITIALIZATION
@@ -250,7 +251,25 @@ def render_hit(i: int, h: dict, metadata_cache: dict) -> None:
 # SEARCH PAGE
 # =============================================================================
 def render_search_page() -> None:
-    st.title("🔎 Search indexed video segments")
+    st.title(APP_TITLE)
+    st.caption("Upload videos, define annotation labels, run LLM labeling, and search across segment-level results.")
+
+    with st.expander("How to use this app", expanded=False):
+        st.markdown(
+            """
+            1. **Upload**: Open the **Upload** page and submit either YouTube links or a CSV file with one video URL per row.
+            2. **Manage videos**: Use **Manage Videos** to confirm indexing status and clean up records when needed.
+            3. **Create labels**: In **Label Management**, define your own annotation goals (for example, vaccine skepticism or trust messaging).
+            4. **Run labeling**: Use **Label Evaluation** to apply the LLM annotator to indexed segments for each selected label.
+            5. **Search and filter**: Return here to search by keyword, filter by `video_id`, and filter by predicted labels.
+            6. **Inspect evidence**: Expand any result card to read the excerpt, review confidence/rationale, and jump directly to timestamps.
+
+            **Tips**
+            - You can search with just labels (no text query) by selecting one or more labels in the sidebar.
+            - For hybrid search, keep `k` roughly 4x `top` for stronger recall.
+            - Use the cache refresh button if new videos were recently ingested.
+            """
+        )
 
     # Load metadata on first run
     if not st.session_state.get('metadata_loaded'):

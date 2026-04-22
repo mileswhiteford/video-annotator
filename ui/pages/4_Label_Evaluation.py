@@ -21,7 +21,9 @@ load_dotenv()
 
 EVAL_LABELS_URL = os.environ.get("EVAL_LABELS_URL", "")
 
-st.title("Label Accuracy Evaluation")
+APP_TITLE = "VANTAGE-AI: Video ANnotation, TAGging & Exploration"
+st.title(APP_TITLE)
+st.subheader("Label Accuracy Evaluation")
 
 if not EVAL_LABELS_URL:
     st.error("EVAL_LABELS_URL must be configured in .env")

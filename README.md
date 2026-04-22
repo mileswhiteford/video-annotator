@@ -1,39 +1,36 @@
-# Video Annotator – Batch Ingest + Index Pipeline (Box → Speech → Segments → Embeddings → Search)
+# VANTAGE-AI: Video ANnotation, TAGging & Exploration
 
-This repo contains scripts to:
+VANTAGE-AI helps researchers and analysts turn long-form video collections into searchable, label-aware evidence.
 
-1. Enumerate `.m4a` files from a **Box shared folder** and generate a manifest (`videos.jsonl`)
-2. Run each file through the Azure Functions pipeline:
+The app supports an end-to-end workflow:
 
-   * Submit batch transcription (`TranscribeHttp`)
-   * Write 30s segments JSON to Blob (`segments/<video_id>.json`)
-   * Embed + index segments into Azure AI Search (`EmbedAndIndex`)
-3. Query indexed segments (`SearchSegments`)
+1. Upload videos from YouTube or bulk-import links from CSV.
+2. Define custom annotation labels in plain language (for example, "expresses skepticism of vaccines").
+3. Run LLM-based labeling over segment-level transcripts.
+4. Search passages by keyword and/or label to find relevant moments quickly.
 
-## Prerequisites
+## Core capabilities
 
-* Python 3.11+ recommended
-* Azure Functions already deployed (or runnable locally)
-* Box shared folder link that contains `.m4a` files
-* Working Box API token:
+- **Video ingestion**: Bring in content from multiple source link types.
+- **Segment-level indexing**: Transcripts are split and indexed for granular retrieval.
+- **Custom label taxonomy**: Teams define their own analytic labels without code changes.
+- **LLM-assisted annotation**: Labels are evaluated against video segments with confidence and rationale fields.
+- **Evidence-first retrieval**: Search results include passage text, timestamps, source links, and predicted labels.
 
-  * EITHER a **Developer Token** (quick + expires)
-  * OR OAuth tokens (`BOX_ACCESS_TOKEN` + `BOX_REFRESH_TOKEN` + client id/secret)
+## Repository overview
 
-## Repo Layout (expected)
+This repository combines ingestion scripts, backend function integrations, and the Streamlit UI:
 
-```
-transcribe/
-  scripts/
-    box_auth.py
-    box_shared_folder_manifest.py
-  import_videos.py
-  videos.jsonl            # generated
-  requirements.txt
-  .env                    # you create this (NOT committed)
-```
+- `ui/ui_search.py`: main Streamlit app entrypoint with multipage navigation.
+- `ui/pages/`: upload, video management, label management, evaluation, and diagnostics pages.
+- `import_videos.py`: batch importer for transcription and indexing pipeline runs.
+- `scripts/box_shared_folder_manifest.py`: helper for generating `videos.jsonl` manifests from Box folders.
 
-## 1) Create a virtual environment + install deps
+## Quick start
+
+### 1) Install dependencies
+
+From the project root:
 
 ```bash
 python -m venv .venv
@@ -41,147 +38,52 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-If you don’t have a `requirements.txt` for scripts yet, minimally you’ll need:
+### 2) Configure environment variables
 
-```txt
-requests
-python-dotenv
-```
-
-(Box listing can be done via raw REST calls, so you may not need `boxsdk`.)
-
-## 2) Create your `.env`
-
-Create a `.env` file in the project root (same directory you run scripts from):
-
-### Box settings
-
-Set the shared folder URL:
+Create environment files (for example `ui/.env` and/or root `.env`) with your function and service endpoints:
 
 ```env
-BOX_SHARED_FOLDER_URL=https://tulane.box.com/s/<shared-folder-token>
+SEARCH_FN_URL=https://<your-function-app>.azurewebsites.net/api/SearchSegments?code=...
+MANAGE_LABELS_URL=https://<your-function-app>.azurewebsites.net/api/ManageLabels?code=...
+EVAL_LABELS_URL=https://<your-function-app>.azurewebsites.net/api/EvalLabels?code=...
 ```
 
-Choose **one** auth method:
+You may also need storage, speech, and search credentials depending on which pages and pipeline actions you use.
 
-#### Option A (fastest): Developer Token
+### 3) Run the UI
 
-```env
-BOX_TOKEN=<your_box_developer_token>
-```
-
-#### Option B (durable): OAuth refresh tokens
-
-```env
-BOX_CLIENT_ID=<your_box_client_id>
-BOX_CLIENT_SECRET=<your_box_client_secret>
-BOX_ACCESS_TOKEN=<your_box_access_token>
-BOX_REFRESH_TOKEN=<your_box_refresh_token>
-```
-
-> Note: refresh tokens can become invalid if rotated/revoked. If you see `invalid_grant`, re-run your OAuth login flow and update `.env`.
-
-### Azure Function endpoints
-
-These should be the **full function URLs**, including `?code=...`:
-
-```env
-TRANSCRIBE_URL=https://<yourapp>.azurewebsites.net/api/TranscribeHttp?code=...
-EMBED_INDEX_URL=https://<yourapp>.azurewebsites.net/api/EmbedAndIndex?code=...
-SEARCH_FN_URL=https://<yourapp>.azurewebsites.net/api/SearchSegments?code=...
-```
-
-### Optional runner settings
-
-```env
-SEGMENTS_CONTAINER=segments
-POLL_SECONDS=15
-MAX_ACTIVE=10
-```
-
-## 3) Generate the manifest from Box (`videos.jsonl`)
-
-This script reads your Box shared folder and outputs `videos.jsonl` with one line per `.m4a`:
-
-```jsonl
-{"video_id":"vid_123","media_url":"https://..."}
-{"video_id":"vid_456","media_url":"https://..."}
-```
-
-Run:
+From `ui/`:
 
 ```bash
-python scripts/box_shared_folder_manifest.py
+python -m streamlit run ui_search.py
 ```
 
-### Sanity check one URL
+Then open the local Streamlit URL (typically `http://localhost:8501`).
 
-Pick one entry from `videos.jsonl` and confirm it downloads:
+## Typical usage flow in the UI
 
-```bash
-python - <<'PY'
-import json
-with open("videos.jsonl","r") as f:
-    print(json.loads(next(f)))
-PY
+1. **Upload** videos or bulk CSV links.
+2. **Manage Videos** to confirm content is available and indexed.
+3. **Label Management** to create or revise analytic labels.
+4. **Label Evaluation** to run LLM annotations for chosen labels.
+5. **Search** to retrieve passages with keyword + label filters.
 
-curl -I -L "<media_url>"
-```
+## Pipeline notes
 
-You want `200 OK` (not HTML/404). If this fails, Speech won’t be able to fetch it either.
+If you are running ingestion outside the UI:
 
-## 4) Run the pipeline import (`import_videos.py`)
+- Generate manifests with `scripts/box_shared_folder_manifest.py`.
+- Run the importer with `import_videos.py` to trigger transcription and indexing.
+- Query `SearchSegments` to validate indexed retrieval.
 
-This script:
+## Security
 
-* reads `videos.jsonl`
-* submits transcription jobs via `TranscribeHttp`
-* polls until each completes
-* indexes segments via `EmbedAndIndex`
+- Never commit secrets (`.env`, tokens, keys, state files).
+- Prefer least-privilege keys for UI and query operations.
+- Rotate credentials if they are accidentally exposed.
 
-Run:
+## More documentation
 
-```bash
-python import_videos.py
-```
-
-### Progress + resume
-
-The importer writes a `pipeline_state.json` file as it runs. If the script stops, you can rerun it and it will resume from the saved state.
-
-## 5) Verify search
-
-Once a few videos are indexed, query your `SearchSegments` function:
-
-```bash
-curl -X POST "$SEARCH_FN_URL" \
-  -H "Content-Type: application/json" \
-  -d '{"q":"measles","mode":"hybrid","top":5,"k":40}'
-```
-
-If you get results, your segments are searchable.
-
-## Troubleshooting
-
-### Box links return 404
-
-* Ensure the manifest script is producing **working `media_url`s**
-* Validate with `curl -I -L "<media_url>"` (must end in 200)
-* If a shared link works in browser but not via curl, it may rely on cookies/redirects. The manifest script should output a direct download URL.
-
-### Importer submits jobs but never completes
-
-* Speech batch jobs can take time; check your `TranscribeHttp` function logs / Application Insights
-* Consider increasing `POLL_SECONDS` to reduce throttling
-* Reduce `MAX_ACTIVE` if you see rate-limit behavior
-
-### `EmbedAndIndex` fails with invalid document key
-
-* Azure AI Search keys can’t contain `:` etc. If you use segment keys like `vid:0001`, replace `:` with `_` or `-`.
-
-## Security notes
-
-* **Do not commit** `.env`, `pipeline_state.json`, or any token/key material.
-* Prefer query keys (read-only) for Search in front-end scenarios.
-* For long-term automation, use a Box app auth method approved by your org (not developer token).
+- UI setup and deployment details: `ui/README.md`
+- Additional project docs: `docs/`
 
