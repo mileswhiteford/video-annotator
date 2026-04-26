@@ -86,7 +86,7 @@ def _enqueue_labeling_job(library: Dict[str, Any]) -> None:
     if not unapplied_labels and not removed_label_names:
         return
 
-    label_defs = [{"name": l["name"], "description": l["description"]} for l in unapplied_labels]
+    label_defs = [{"name": l["name"], "description": l["description"], "examples": l.get("examples", [])} for l in unapplied_labels]
     valid_names = [l["name"] for l in unapplied_labels]
     strip_names = list({l["name"] for l in unapplied_labels} | removed_label_names)
 
@@ -192,10 +192,12 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 )
 
             now = datetime.now(timezone.utc).isoformat()
+            examples = [e.strip() for e in body.get("examples", []) if e.strip()][:3]
             new_label = {
                 "label_id": str(uuid.uuid4()),
                 "name": name,
                 "description": description,
+                "examples": examples,
                 "created_at": now,
                 "updated_at": now,
                 "is_active": True,
@@ -250,6 +252,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
             if "description" in body:
                 label["description"] = body["description"].strip()
+
+            if "examples" in body:
+                label["examples"] = [e.strip() for e in body["examples"] if e.strip()][:3]
 
             if "is_active" in body:
                 label["is_active"] = bool(body["is_active"])

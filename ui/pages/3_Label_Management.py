@@ -104,6 +104,11 @@ with tab_view:
                     st.write(f"**Label ID:** `{label['label_id']}`")
                     st.write(f"**Created:** {label['created_at']}")
                     st.write(f"**Updated:** {label['updated_at']}")
+                    examples = label.get("examples", [])
+                    if examples:
+                        st.write(f"**Positive Examples ({len(examples)}/3):**")
+                        for ex in examples:
+                            st.caption(f"• _{ex}_")
 
 # --- TAB 2: Add Label ---
 with tab_add:
@@ -114,13 +119,20 @@ with tab_add:
             placeholder="Describe what this label represents...",
             help="This description will be used by AI to understand when to apply this label.",
         )
+        st.caption("Positive Examples (optional, up to 3) — paste example text that represents this label:")
+        ex1 = st.text_area("Example 1", placeholder="e.g., a transcript segment that clearly shows this label...", height=80)
+        ex2 = st.text_area("Example 2", placeholder="", height=80)
+        ex3 = st.text_area("Example 3", placeholder="", height=80)
         add_submit = st.form_submit_button("Add Label", type="primary")
 
         if add_submit:
             if not new_name or not new_desc:
                 st.error("Both name and description are required.")
+            elif any(len(e.split()) > 100 for e in [ex1, ex2, ex3] if e.strip()):
+                st.error("Examples must be 100 words or fewer.")
             else:
-                result = call_labels_api("POST", {"name": new_name, "description": new_desc})
+                examples = [e.strip() for e in [ex1, ex2, ex3] if e.strip()]
+                result = call_labels_api("POST", {"name": new_name, "description": new_desc, "examples": examples})
                 if result and "label_id" in result:
                     st.success(f"Label '{result['name']}' added!")
                     st.info("Labeling queued — updated labels will appear in search results shortly.")
@@ -139,6 +151,13 @@ with tab_edit:
                 edit_name = st.text_input("Label Name", value=label["name"])
                 edit_desc = st.text_area("Description", value=label["description"])
 
+                existing_examples = label.get("examples", [])
+                st.caption("Positive Examples (up to 3) — edit or clear to remove:")
+                ex_vals = existing_examples + [""] * (3 - len(existing_examples))
+                ex1 = st.text_area("Example 1", value=ex_vals[0], height=80)
+                ex2 = st.text_area("Example 2", value=ex_vals[1], height=80)
+                ex3 = st.text_area("Example 3", value=ex_vals[2], height=80)
+
                 col_update, col_delete = st.columns(2)
                 with col_update:
                     update_submit = st.form_submit_button("Update", type="primary", use_container_width=True)
@@ -146,11 +165,16 @@ with tab_edit:
                     delete_submit = st.form_submit_button("Deactivate", use_container_width=True)
 
                 if update_submit:
-                    result = call_labels_api("PUT", {
-                        "label_id": label["label_id"],
-                        "name": edit_name,
-                        "description": edit_desc,
-                    })
+                    if any(len(e.split()) > 100 for e in [ex1, ex2, ex3] if e.strip()):
+                        st.error("Examples must be 100 words or fewer.")
+                    else:
+                        examples = [e.strip() for e in [ex1, ex2, ex3] if e.strip()]
+                        result = call_labels_api("PUT", {
+                            "label_id": label["label_id"],
+                            "name": edit_name,
+                            "description": edit_desc,
+                            "examples": examples,
+                        })
                     if result and "label_id" in result:
                         st.success("Label updated!")
                         st.info("Labeling queued — updated labels will appear in search results shortly.")

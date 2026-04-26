@@ -86,16 +86,20 @@ def load_all_video_metadata() -> Dict[str, Dict]:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def get_label_names() -> list:
+def get_labels() -> list:
     if not MANAGE_LABELS_URL:
         return []
     try:
         r = requests.get(MANAGE_LABELS_URL, timeout=30)
         if r.status_code >= 400:
             return []
-        return [l["name"] for l in r.json().get("labels", [])]
+        return r.json().get("labels", [])
     except Exception:
         return []
+
+
+def get_label_names() -> list:
+    return [l["name"] for l in get_labels()]
 
 
 # =============================================================================
