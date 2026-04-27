@@ -1,5 +1,5 @@
 """
-system_diagnostics.py - System Diagnostics page for the Video Annotation Platform
+system_diagnostics.py - System Diagnostics page for VANTAGE-AI
 """
 
 import sys
@@ -10,7 +10,9 @@ from utils import (
     check_yt_dlp, debug_check_index_schema
 )
 
-st.header("⚙️ System Diagnostics")
+APP_TITLE = "VANTAGE-AI: Video ANnotation, TAGging & Exploration"
+st.title(APP_TITLE)
+st.subheader("⚙️ System Diagnostics")
 st.info("Check system configuration and troubleshoot issues")
 
 # Configuration status

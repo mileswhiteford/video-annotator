@@ -22,7 +22,9 @@ load_dotenv()
 
 MANAGE_LABELS_URL = os.environ.get("MANAGE_LABELS_URL", "")
 
-st.title("Label Library Management")
+APP_TITLE = "VANTAGE-AI: Video ANnotation, TAGging & Exploration"
+st.title(APP_TITLE)
+st.subheader("Label Library Management")
 
 if not MANAGE_LABELS_URL:
     st.error("MANAGE_LABELS_URL must be configured in .env")

@@ -1,5 +1,5 @@
 """
-manage_videos.py - Manage Videos page for the Video Annotation Platform
+manage_videos.py - Manage Videos page for VANTAGE-AI
 """
 
 import sys
@@ -16,7 +16,9 @@ from utils import (
     delete_video_by_id
 )
 
-st.header("📚 Manage Stored Videos")
+APP_TITLE = "VANTAGE-AI: Video ANnotation, TAGging & Exploration"
+st.title(APP_TITLE)
+st.subheader("📚 Manage Stored Videos")
 st.info("View, search, and manage all processed videos and their source URLs")
 
 if not SEARCH_ENDPOINT or not SEARCH_KEY:
