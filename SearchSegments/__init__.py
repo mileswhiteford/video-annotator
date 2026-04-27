@@ -57,8 +57,8 @@ def _build_filter(
             for name in escaped:
                 clauses.append(f"pred_labels/any(l: l eq '{name}')")
         else:  # "any"
-            joined = ",".join(escaped)
-            clauses.append(f"pred_labels/any(l: search.in(l, '{joined}'))")
+            any_clause = " or ".join(f"l eq '{name}'" for name in escaped)
+            clauses.append(f"pred_labels/any(l: {any_clause})")
     return " and ".join(clauses) if clauses else None
 
 

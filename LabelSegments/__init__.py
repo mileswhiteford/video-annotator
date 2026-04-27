@@ -127,7 +127,8 @@ def _call_gpt(label_defs: List[Dict], seg_inputs: List[Dict]) -> List[Dict]:
         "For each segment, return every label with:\n"
         '  - "applied": true if the segment mentions, discusses, or is clearly related to the label topic\n'
         '  - "applied": false if the label does not apply\n'
-        '  - "rationale": a brief explanation of your decision either way\n\n'
+        '  - "rationale": a brief explanation of your decision either way\n'
+        "Note: where a label includes 'examples', use them as positive references for what the label looks like in practice.\n\n"
         "Return:\n"
         '{"results": [\n'
         '  {"segment_id": "0000", "labels": [\n'
