@@ -210,10 +210,10 @@ def render_hit(i: int, h: dict, metadata_cache: dict) -> None:
             link_cols = st.columns([2, 2, 3])
 
             with link_cols[0]:
-                if link_type == "Box viewer":
-                    play_label = f"📦 Open in Box viewer"
-                elif link_type.startswith("Box"):
+                if link_type == "Box (download)":
                     play_label = f"⬇️ Download Box video"
+                elif link_type.startswith("Box"):
+                    play_label = f"📦 Open in Box viewer"
                 else:
                     play_label = f"▶️ Play from {ms_to_ts(start_ms)}"
                 st.markdown(
