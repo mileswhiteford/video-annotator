@@ -170,14 +170,17 @@ def _process_batch(
 
     gpt_failed = False
     if label_defs:
-        try:
-            gpt_results = _call_gpt(label_defs, seg_inputs)
-        except Exception as e:
-            logging.warning(f"GPT batch failed for {blob_name} batch {batch_idx}: {e}")
-            gpt_results = []
-            gpt_failed = True
-    else:
         gpt_results = []
+        for attempt in range(2):
+            try:
+                gpt_results = _call_gpt(label_defs, seg_inputs)
+                break
+            except Exception as e:
+                if attempt == 1:
+                    logging.warning(f"GPT batch failed after retry for {blob_name} batch {batch_idx}: {e}")
+                    gpt_failed = True
+                else:
+                    time.sleep(2)
 
     # If GPT failed, return no docs — existing labels are preserved as-is
     if gpt_failed:

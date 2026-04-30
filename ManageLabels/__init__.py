@@ -16,6 +16,7 @@ Output: JSON with label data or operation status
 """
 
 import json
+import logging
 import os
 import threading
 import uuid
@@ -74,6 +75,13 @@ def _read_labeling_status() -> Optional[Dict]:
         return json.loads(bc.download_blob().readall())
     except Exception:
         return None
+
+
+def _start_labeling_job(library: Dict[str, Any]) -> None:
+    try:
+        _enqueue_labeling_job(library)
+    except Exception as e:
+        logging.exception(f"Failed to enqueue labeling job: {e}")
 
 
 def _enqueue_labeling_job(library: Dict[str, Any]) -> None:
@@ -207,7 +215,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             library["labels"].append(new_label)
             library["last_updated"] = now
             _write_label_json(library)
-            threading.Thread(target=_enqueue_labeling_job, args=(library,), daemon=True).start()
+            threading.Thread(target=_start_labeling_job, args=(library,), daemon=True).start()
 
             return func.HttpResponse(
                 json.dumps(new_label, ensure_ascii=False),
@@ -264,7 +272,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             label["updated_at"] = datetime.now(timezone.utc).isoformat()
             library["last_updated"] = label["updated_at"]
             _write_label_json(library)
-            threading.Thread(target=_enqueue_labeling_job, args=(library,), daemon=True).start()
+            threading.Thread(target=_start_labeling_job, args=(library,), daemon=True).start()
 
             return func.HttpResponse(
                 json.dumps(label, ensure_ascii=False),
@@ -298,7 +306,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             label["updated_at"] = datetime.now(timezone.utc).isoformat()
             library["last_updated"] = label["updated_at"]
             _write_label_json(library)
-            threading.Thread(target=_enqueue_labeling_job, args=(library,), daemon=True).start()
+            threading.Thread(target=_start_labeling_job, args=(library,), daemon=True).start()
 
             return func.HttpResponse(
                 json.dumps({"success": True, "message": "Label deactivated"}),
@@ -316,7 +324,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     count += 1
             library["last_updated"] = now
             _write_label_json(library)
-            threading.Thread(target=_enqueue_labeling_job, args=(library,), daemon=True).start()
+            threading.Thread(target=_start_labeling_job, args=(library,), daemon=True).start()
 
             return func.HttpResponse(
                 json.dumps({"message": f"Reset {count} labels, re-labeling queued."}),
