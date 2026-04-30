@@ -27,6 +27,7 @@ Configuration (via .env or Container App env vars):
   - SPEECH_KEY: Azure Speech service key
 """
 
+import json
 import os
 import requests
 import streamlit as st
@@ -156,39 +157,26 @@ def render_hit(i: int, h: dict, metadata_cache: dict) -> None:
 
     with st.expander(header, expanded=(i <= 3)):
 
-        # ── Link row ──────────────────────────────────────────────────────
-        if start_link == "#":
-            st.error("❌ No source URL stored — cannot generate playback link")
-        else:
-            link_cols = st.columns([2, 2, 3])
+        # ── Segment text ──────────────────────────────────────────────────
+        st.write(h.get("text", ""))
 
-            with link_cols[0]:
-                st.markdown(
-                    f"**[▶️ Play from {ms_to_ts(start_ms)}]({start_link})**",
-                    unsafe_allow_html=True,
-                )
-                st.caption(f"*{link_type}*")
+        # ── Labels / rationale ───────────────────────────────────────────
+        labels = h.get("pred_labels") or []
+        if labels:
+            st.write("**Labels:**", ", ".join(labels))
+            raw_details = h.get("pred_label_details")
+            if raw_details:
+                try:
+                    details = json.loads(raw_details) if isinstance(raw_details, str) else raw_details
+                    applied = [d for d in details if d.get("applied") and d.get("rationale")]
+                    if applied:
+                        with st.expander("Show rationale", expanded=False):
+                            for d in applied:
+                                st.markdown(f"**{d['name']}:** {d['rationale']}")
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
-            with link_cols[1]:
-                if supports_time and end_ms and end_ms != start_ms:
-                    st.markdown(
-                        f"**[⏩ Jump to {ms_to_ts(end_ms)}]({end_link})**",
-                        unsafe_allow_html=True,
-                    )
-                    st.caption("end of segment")
-                elif not supports_time and end_ms and end_ms != start_ms:
-                    st.info(f"⏱ **{ms_to_ts(start_ms)}** – **{ms_to_ts(end_ms)}**")
-                    st.caption("seek manually in player")
-                else:
-                    st.empty()
-
-            with link_cols[2]:
-                if source_url:
-                    display_url = (source_url[:45] + "…") if len(source_url) > 45 else source_url
-                    st.caption(f"🔗 [{display_url}]({source_url})")
-                    st.caption(f"from {source_origin}")
-                else:
-                    st.caption("❌ No source URL")
+        st.divider()
 
         # ── Embedded Box player (starts at exact segment second) ──────────
         # Box viewer URLs don't support ?t= deep-linking. Fetch bytes
@@ -215,36 +203,41 @@ def render_hit(i: int, h: dict, metadata_cache: dict) -> None:
             else:
                 st.caption("⚠ Could not load audio preview — open Box link above")
 
-        # ── Segment text ──────────────────────────────────────────────────
-        st.divider()
-        st.write(h.get("text", ""))
+        # ── Link row ──────────────────────────────────────────────────────
+        if start_link == "#":
+            st.error("❌ No source URL stored — cannot generate playback link")
+        else:
+            link_cols = st.columns([2, 2, 3])
 
-        # ── Labels / confidence / rationale ──────────────────────────────
-        labels    = h.get("pred_labels") or []
-        conf      = h.get("pred_confidence")
-        rationale = h.get("pred_rationale")
-        if labels or conf is not None or rationale:
-            st.divider()
-            if labels:
-                st.write("**Labels:**", ", ".join(labels))
-            if conf is not None:
-                st.write("**Confidence:**", conf)
-            if rationale:
-                st.write("**Rationale:**", rationale)
+            with link_cols[0]:
+                if link_type == "Box viewer":
+                    play_label = f"📦 Open in Box viewer"
+                elif link_type.startswith("Box"):
+                    play_label = f"⬇️ Download Box video"
+                else:
+                    play_label = f"▶️ Play from {ms_to_ts(start_ms)}"
+                st.markdown(
+                    f"**[{play_label}]({start_link})**",
+                    unsafe_allow_html=True,
+                )
+                st.caption(f"*{link_type}*")
 
-        # ── Debug ────────────────────────────────────────────────────────
-        with st.expander("🔧 Debug", expanded=False):
-            st.json({
-                "video_id":      vid,
-                "source_url":    source_url,
-                "source_origin": source_origin,
-                "start_link":    start_link,
-                "end_link":      end_link,
-                "link_type":     link_type,
-                "supports_time": supports_time,
-            })
+            with link_cols[1]:
+                if end_ms and end_ms != start_ms:
+                    st.info(f"⏱ **{ms_to_ts(start_ms)}** – **{ms_to_ts(end_ms)}**")
+                else:
+                    st.empty()
 
-    # Return stats for summary footer
+            with link_cols[2]:
+                if source_url:
+                    display_url = (source_url[:45] + "…") if len(source_url) > 45 else source_url
+                    st.caption(f"🔗 [{display_url}]({source_url})")
+                    st.caption(f"from {source_origin}")
+                else:
+                    st.caption("❌ No source URL")
+
+
+# Return stats for summary footer
     return {
         "source_origin": source_origin if source_url else "missing",
         "link_type":     link_type,
